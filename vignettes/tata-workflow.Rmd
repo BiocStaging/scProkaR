@@ -17,7 +17,8 @@ abstract: |
   and sampling times to construct a graph of cell states. This vignette
   demonstrates the individual functions and the run_tata() wrapper using a
   simulated branching response to three drugs. It compares time-informed
-  and topology-only runs, then shows how to inspect pseudotime, terminal-state probabilities, branch assignments and gene-expression trends.
+  and topology-only runs, then shows how to inspect pseudotime, terminal-state
+  probabilities, branch assignments and gene-expression trends.
   Comparisons with the supplied time labels assess consistency with those
   labels.
 vignette: >
@@ -75,13 +76,13 @@ embedding stored in `reducedDims()`. `run_tata()` returns a list containing
 the updated object, graphs, score tables and other results.
 
 * The input embedding may come from `r BiocStyle::Biocpkg("scater")`,
-  `r BiocStyle::Biocpkg("scran")`, `IntegrateBacData()` or another analysis.
+    `r BiocStyle::Biocpkg("scran")`, `IntegrateBacData()` or another analysis.
 * The updated object's `colData()` contains clusters, pseudotime, terminal
-  probabilities, branch entropy and branch assignments. The `"TATA"`
-  embedding is stored in `reducedDims()`, with graph results in `metadata()`.
+    probabilities, branch entropy and branch assignments. The `"TATA"`
+    embedding is stored in `reducedDims()`, with graph results in `metadata()`.
 * Plotting tools can use these annotations directly. Downstream statistical
-  analyses must still account for independent samples and the uncertainty
-  in inferred branches.
+    analyses must still account for independent samples and the uncertainty
+    in inferred branches.
 
 TATA draws on PAGA's graph abstraction and Palantir's terminal-state
 probability model. Its implementation combines these ideas with observed
@@ -433,7 +434,8 @@ tapply(
 # The `run_tata()` wrapper
 
 `run_tata()` combines graph construction, clustering, optional temporal
-refinement, edge scoring, graph abstraction, pseudotime and branch probabilities.
+refinement, edge scoring, graph abstraction, pseudotime and branch
+probabilities.
 Here, `expected_branches = 3` supplies the known number of simulated
 terminal states; branch count is therefore an input to this example.
 
@@ -753,12 +755,13 @@ branch_result$terminal_clusters
 The terminal-state probabilities are summarised by the following quantities:
 
 * **Entropy** is normalised Shannon entropy over terminal-state
-  probabilities. Higher values indicate more diffuse model predictions;
-  entropy is used here as a model-based measure of plasticity.
+    probabilities. Higher values indicate more diffuse model predictions;
+    entropy is used here as a model-based measure of plasticity.
 * **Commitment** is calculated as one minus normalised entropy. The maximum
-  terminal probability is reported separately as `tata_max_branch_probability`.
+    terminal probability is reported separately as
+    `tata_max_branch_probability`.
 * **Assignment** summarises the probabilities with a branch label for
-  subsetting. It is an inferred annotation, not observed cell fate.
+    subsetting. It is an inferred annotation, not observed cell fate.
 
 ```{r cluster-branch-table}
 prob_cols <- grep(
@@ -771,7 +774,7 @@ head(
     tata$cluster_branch_probabilities[
         ,
         c("cluster", prob_cols, "tata_branch_entropy",
-          "tata_branch_assignment")
+            "tata_branch_assignment")
     ]
 )
 ```
@@ -973,47 +976,47 @@ tata_overview$branch_probabilities
 # Practical guidance
 
 * **Inspect neighbourhood size.** Check graph connectivity, cluster sizes
-  and time distributions across plausible values of `k`.
+    and time distributions across plausible values of `k`.
 * **Inspect directional evidence.** Increasing `direction_threshold` leaves
-  more retained connections bidirectional. The threshold is a score cutoff,
-  not a calibrated confidence level.
+    more retained connections bidirectional. The threshold is a score cutoff,
+    not a calibrated confidence level.
 * **Check temporal disagreement.** Use `anticausal_edge_mass()` with a
-  tolerance suited to the sampling schedule, then inspect the flagged edges.
+    tolerance suited to the sampling schedule, then inspect the flagged edges.
 * **Retain probability information.** Branch assignments simplify uncertain
-  predictions. Downstream inference still requires an appropriate model and
-  independent biological replicates.
+    predictions. Downstream inference still requires an appropriate model and
+    independent biological replicates.
 * **Use comparable time labels.** Confirm that units and the origin of time
-  are consistent across conditions before combining their observations.
+    are consistent across conditions before combining their observations.
 
 # Further reading
 
 * Robinson MD, McCarthy DJ, Smyth GK (2010). edgeR: a Bioconductor package
-  for differential expression analysis of digital gene expression data.
-  *Bioinformatics* 26, 139--140.
-  <https://bioconductor.org/packages/edgeR/>
+    for differential expression analysis of digital gene expression data.
+    *Bioinformatics* 26, 139--140.
+    <https://bioconductor.org/packages/edgeR/>
 * Haghverdi L, Lun ATL, Morgan MD, Marioni JC (2018). Batch effects in
-  single-cell RNA-sequencing data are corrected by matching mutual nearest
-  neighbors. *Nature Biotechnology* 36, 421--427. Implemented in
-  `r BiocStyle::Biocpkg("batchelor")`.
+    single-cell RNA-sequencing data are corrected by matching mutual nearest
+    neighbors. *Nature Biotechnology* 36, 421--427. Implemented in
+    `r BiocStyle::Biocpkg("batchelor")`.
 * Korsunsky I *et al.* (2019). Fast, sensitive and accurate integration of
-  single-cell data with Harmony. *Nature Methods* 16, 1289--1296.
+    single-cell data with Harmony. *Nature Methods* 16, 1289--1296.
 * Luecken MD *et al.* (2022). Benchmarking atlas-level data integration in
-  single-cell genomics (scIB). *Nature Methods* 19, 41--50. The integration
-  metrics in `BenchmarkIntegration()` are inspired by this work and use
-  independent implementations.
+    single-cell genomics (scIB). *Nature Methods* 19, 41--50. The integration
+    metrics in `BenchmarkIntegration()` are inspired by this work and use
+    independent implementations.
 * Wolf FA *et al.* (2019). PAGA: graph abstraction reconciles clustering
-  with trajectory inference. *Genome Biology* 20, 59. TATA's abstract
-  cluster graph follows this design.
+    with trajectory inference. *Genome Biology* 20, 59. TATA's abstract
+    cluster graph follows this design.
 * Setty M *et al.* (2019). Characterization of cell fate probabilities in
-  single-cell data with Palantir. *Nature Biotechnology* 37, 451--460. The
-  source of the absorbing-Markov branch-probability layer.
+    single-cell data with Palantir. *Nature Biotechnology* 37, 451--460. The
+    source of the absorbing-Markov branch-probability layer.
 * McInnes L, Healy J, Melville J (2018). UMAP: Uniform Manifold
-  Approximation and Projection for dimension reduction.
-  <https://arxiv.org/abs/1802.03426>. Available in R via
-  `r BiocStyle::CRANpkg("uwot")`.
+    Approximation and Projection for dimension reduction.
+    <https://arxiv.org/abs/1802.03426>. Available in R via
+    `r BiocStyle::CRANpkg("uwot")`.
 * Amezquita RA *et al.* (2020). Orchestrating single-cell analysis with
-  Bioconductor. *Nature Methods* 17, 137--145.
-  <https://bioconductor.org/books/release/OSCA/>
+    Bioconductor. *Nature Methods* 17, 137--145.
+    <https://bioconductor.org/books/release/OSCA/>
 
 # Session information
 

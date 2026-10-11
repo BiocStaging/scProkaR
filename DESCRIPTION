@@ -1,13 +1,14 @@
 Package: scProkaR
 Type: Package
 Title: Microbial Single-Cell RNA-Seq Analysis for Bacterial Systems
-Version: 0.99.1
+Version: 0.99.2
 Authors@R:
     c(
-      person("Jinxin", "Zhao", email = "jinxin.zhao@monash.edu",
-             role = c("aut", "cre")),
-      person("Ning", "Liu", email = "ning.liu@adelaide.edu.au",
-             role = "aut")
+        person("Jinxin", "Zhao", email = "jinxin.zhao@monash.edu",
+            role = c("aut", "cre"),
+            comment = c(ORCID = "0000-0002-0604-3541")),
+        person("Ning", "Liu", email = "ning.liu@adelaide.edu.au",
+            role = "aut")
     )
 Description: scProkaR provides a SingleCellExperiment-centred workflow for
     microbial single-cell RNA sequencing data. It standardises bacterial
@@ -57,7 +58,10 @@ Suggests:
     uwot
 VignetteBuilder: knitr
 Config/testthat/edition: 3
-biocViews: Software, SingleCell, RNASeq, Transcriptomics, GeneExpression, DifferentialExpression, Clustering, GraphAndNetwork, QualityControl, MultipleComparison, Normalization, BatchEffect, DimensionReduction, TimeCourse, Microbiome, Sequencing, Visualization
+biocViews: Software, SingleCell, RNASeq, Transcriptomics, GeneExpression,
+    DifferentialExpression, Clustering, GraphAndNetwork, QualityControl,
+    MultipleComparison, Normalization, BatchEffect, DimensionReduction,
+    TimeCourse, Microbiome, Sequencing, Visualization
 LazyData: false
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3

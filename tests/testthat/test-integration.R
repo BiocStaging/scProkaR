@@ -19,7 +19,18 @@ test_that("IntegrateBacData runs optional backends when installed", {
     }
 
     if (requireNamespace("harmony", quietly = TRUE)) {
-        out <- IntegrateBacData(sce, batch_col = "batch", method = "harmony", dims = 1:2)
+        ## Current Harmony adjusts its block size for this tiny fixture.
+        ## Accept that documented backend diagnostic, while rejecting others.
+        out <- withCallingHandlers(
+            IntegrateBacData(
+                sce, batch_col = "batch", method = "harmony", dims = 1:2
+            ),
+            warning = function(w) {
+                expect_match(conditionMessage(w),
+                    "Too few cells.*Setting block_size")
+                invokeRestart("muffleWarning")
+            }
+        )
         expect_true(
             "integrated_harmony" %in%
                 SingleCellExperiment::reducedDimNames(out)

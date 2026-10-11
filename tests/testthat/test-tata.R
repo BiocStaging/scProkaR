@@ -78,7 +78,18 @@ test_that("run_tata returns graph, pseudotime, and plotting outputs", {
     if (length(trend_genes) == 0L) {
         trend_genes <- rownames(tata$sce)[seq_len(min(4, nrow(tata$sce)))]
     }
-    trend_result <- compute_tata_gene_trends(tata, genes = trend_genes)
+    ## The tied pseudotimes in this simulation can yield singular local fits.
+    ## These diagnostics are expected here and remain visible in package code.
+    trend_result <- withCallingHandlers(
+        compute_tata_gene_trends(tata, genes = trend_genes),
+        warning = function(w) {
+            expect_match(conditionMessage(w), paste(
+                "pseudoinverse|neighborhood radius|reciprocal condition",
+                "near singularities|span too small", sep = "|"
+            ))
+            invokeRestart("muffleWarning")
+        }
+    )
     trend_plot <- plot_tata_gene_trends(trend_result, ncol = 2)
     heatmap_plot <- plot_tata_gene_trend_heatmap(trend_result, n_clusters = 2)
     overview_plot <- plot_tata_results(tata, dimred = "UMAP")

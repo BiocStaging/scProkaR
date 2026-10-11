@@ -1,3 +1,12 @@
+.tata_correlation <- function(x, y, method) {
+    ## Correlation is undefined for a constant vector or fewer than two pairs.
+    if (length(x) < 2L || length(unique(x)) < 2L ||
+            length(unique(y)) < 2L) {
+        return(NA_real_)
+    }
+    stats::cor(x, y, method = method)
+}
+
 #' Orient pseudotime to match increasing real time
 #'
 #' Flip an inferred pseudotime vector when needed so that it best agrees with
@@ -53,8 +62,8 @@ orient_pseudotime_to_time <- function(
     flipped <- .scale_to_unit(flipped_values)
     truth <- .scale_to_unit(time_numeric[ok])
 
-    cor_forward <- suppressWarnings(stats::cor(forward, truth, method = method))
-    cor_flipped <- suppressWarnings(stats::cor(flipped, truth, method = method))
+    cor_forward <- .tata_correlation(forward, truth, method)
+    cor_flipped <- .tata_correlation(flipped, truth, method)
 
     if (is.na(cor_forward)) {
         cor_forward <- -Inf
@@ -375,27 +384,22 @@ branch_onset_metrics <- function(
 
     inferred_scaled <- .scale_to_unit(onset_table$inferred_onset[valid])
     truth_scaled <- .scale_to_unit(onset_table$true_onset[valid])
+    kendall_tau <- .tata_correlation(
+        onset_table$true_onset[valid],
+        onset_table$inferred_onset[valid],
+        method = "kendall"
+    )
 
     summary_df <- data.frame(
         n_branches_used = sum(valid),
-        kendall_tau = suppressWarnings(stats::cor(
-            onset_table$true_onset[valid],
-            onset_table$inferred_onset[valid],
-            method = "kendall"
-        )),
-        spearman_rho = suppressWarnings(stats::cor(
+        kendall_tau = kendall_tau,
+        spearman_rho = .tata_correlation(
             onset_table$true_onset[valid],
             onset_table$inferred_onset[valid],
             method = "spearman"
-        )),
+        ),
         normalized_onset_mae = mean(abs(inferred_scaled - truth_scaled)),
-        branch_onset_order_score = (
-            suppressWarnings(stats::cor(
-                onset_table$true_onset[valid],
-                onset_table$inferred_onset[valid],
-                method = "kendall"
-            )) + 1
-        ) / 2,
+        branch_onset_order_score = (kendall_tau + 1) / 2,
         branch_onset_accuracy = 1 - mean(abs(inferred_scaled - truth_scaled)),
         activation_threshold = activation_threshold,
         stringsAsFactors = FALSE

@@ -1692,27 +1692,13 @@ plot_tata_results <- function(
 .tata_trajectory_path_vertices <- function(
     subgraph, undirected_subgraph, root_cluster, terminal_cluster
 ) {
-    path_vertices <- suppressWarnings(
-        igraph::shortest_paths(
-            subgraph,
-            from = root_cluster,
-            to = terminal_cluster,
-            mode = "out",
-            weights = 1 / pmax(igraph::E(subgraph)$weight, 1e-8)
-        )$vpath[[1]]
+    path_vertices <- .tata_shortest_path_vertices(
+        subgraph, root_cluster, terminal_cluster, mode = "out"
     )
 
     if (length(path_vertices) == 0L) {
-        path_vertices <- suppressWarnings(
-            igraph::shortest_paths(
-                undirected_subgraph,
-                from = root_cluster,
-                to = terminal_cluster,
-                mode = "all",
-                weights = 1 / pmax(
-                    igraph::E(undirected_subgraph)$weight, 1e-8
-                )
-            )$vpath[[1]]
+        path_vertices <- .tata_shortest_path_vertices(
+            undirected_subgraph, root_cluster, terminal_cluster, mode = "all"
         )
     }
 

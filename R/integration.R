@@ -272,80 +272,15 @@ RunIntegratedClustering <- function(
 ) {
     algorithm <- match.arg(algorithm)
 
-    reduction_name <- .scprokar_default_integration_reduction(
-        sce,
-        integrated_reduction = reduction,
-        prefer_umap = FALSE
-    )
-    emb <- as.matrix(SingleCellExperiment::reducedDim(sce, reduction_name))
-    if (!is.null(dims)) {
-        emb <- emb[, dims, drop = FALSE]
-    }
-    if (nrow(emb) < 2L) {
-        stop("Need at least two cells to run clustering.", call. = FALSE)
-    }
-    if (ncol(emb) < 2L) {
-        stop(
-            "Integrated reduction '", reduction_name,
-            "' must have at least two dimensions.",
-            call. = FALSE
-        )
-    }
+    prepared <- .scprokar_clustering_embedding(sce, reduction, dims)
+    reduction_name <- prepared$reduction
+    emb <- prepared$embedding
 
     k <- max(1L, min(as.integer(k), nrow(emb) - 1L))
     graph_data <- .scprokar_build_cluster_graph(emb, k = k)
-    graph <- graph_data$graph
-
-    membership <- if (igraph::gsize(graph) == 0L) {
-        rep(1L, nrow(emb))
-    } else if (algorithm == "louvain") {
-        cluster_args <- list(graph, weights = igraph::E(graph)$weight)
-        if ("resolution" %in% names(formals(igraph::cluster_louvain))) {
-            cluster_args$resolution <- resolution
-        }
-        igraph::membership(do.call(igraph::cluster_louvain, cluster_args))
-    } else if (algorithm == "leiden") {
-        if (!"cluster_leiden" %in% getNamespaceExports("igraph")) {
-            stop(
-                "The installed igraph does not provide `cluster_leiden()`. ",
-                "Use `algorithm = \"louvain\"` or upgrade igraph.",
-                call. = FALSE
-            )
-        }
-        ## `cluster_leiden()` defaults to the CPM objective, whose resolution
-        ## is on a different scale from Louvain's and which over-partitions a
-        ## kNN graph badly. Optimise modularity so that `resolution` means the
-        ## same thing here as it does for `algorithm = "louvain"`.
-        cluster_args <- list(
-            graph,
-            weights = igraph::E(graph)$weight,
-            objective_function = "modularity"
-        )
-        leiden_formals <- names(formals(get(
-            "cluster_leiden",
-            envir = asNamespace("igraph")
-        )))
-        ## igraph 2.1.0 renamed `resolution_parameter` to `resolution` and
-        ## deprecated the old name, so prefer the current spelling.
-        if ("resolution" %in% leiden_formals) {
-            cluster_args$resolution <- resolution
-        } else if ("resolution_parameter" %in% leiden_formals) {
-            cluster_args$resolution_parameter <- resolution
-        }
-        igraph::membership(do.call(igraph::cluster_leiden, cluster_args))
-    } else {
-        if (!is.null(resolution)) {
-            warning(
-                "`resolution` is ignored when `algorithm = \"walktrap\"` ",
-                "because walktrap does not expose a resolution parameter.",
-                call. = FALSE
-            )
-        }
-        igraph::membership(igraph::cluster_walktrap(
-            graph,
-            weights = igraph::E(graph)$weight
-        ))
-    }
+    membership <- .scprokar_cluster_membership(
+        graph_data$graph, algorithm, resolution, n_cells = nrow(emb)
+    )
 
     SummarizedExperiment::colData(sce)[[cluster_col]] <- factor(membership)
 
@@ -902,6 +837,31 @@ RegisterExistingIntegrationEmbeddings <- function(
 }
 
 #' @keywords internal
+.scprokar_harmony_attempt <- function(harmony_fun, args) {
+    state <- new.env(parent = emptyenv())
+    state$converted_warning <- NULL
+    tryCatch(
+        withCallingHandlers(
+            do.call(harmony_fun, args),
+            warning = function(w) {
+                state$converted_warning <- gettextf(
+                    "(converted from warning) %s", conditionMessage(w),
+                    domain = "R"
+                )
+            }
+        ),
+        error = function(e) {
+            ## A warning promoted by warn = 2 is not an API mismatch.
+            if (getOption("warn", 0) >= 2 &&
+                    identical(conditionMessage(e), state$converted_warning)) {
+                stop(e)
+            }
+            NULL
+        }
+    )
+}
+
+#' @keywords internal
 .scprokar_run_harmony <- function(pca_embedding, meta_data, batch_col, ...) {
     extra <- list(...)
     n_cells <- nrow(pca_embedding)
@@ -917,6 +877,7 @@ RegisterExistingIntegrationEmbeddings <- function(
     }
 
     if ("RunHarmony" %in% getNamespaceExports("harmony")) {
+        harmony_fun <- getExportedValue("harmony", "RunHarmony")
         args_new <- c(
             list(
                 data_mat = pca_embedding,
@@ -925,10 +886,9 @@ RegisterExistingIntegrationEmbeddings <- function(
             ),
             extra
         )
-        out <- tryCatch(
-            suppressWarnings(do.call(harmony::RunHarmony, args_new)),
-            error = function(e) NULL
-        )
+        ## Retry version-specific signatures on errors while allowing
+        ## convergence, parameter and other backend warnings to reach callers.
+        out <- .scprokar_harmony_attempt(harmony_fun, args_new)
 
         if (is.null(out)) {
             args_legacy <- c(
@@ -940,10 +900,7 @@ RegisterExistingIntegrationEmbeddings <- function(
                 ),
                 extra
             )
-            out <- tryCatch(
-                suppressWarnings(do.call(harmony::RunHarmony, args_legacy)),
-                error = function(e) NULL
-            )
+            out <- .scprokar_harmony_attempt(harmony_fun, args_legacy)
         }
 
         if (!is.null(out)) {
@@ -962,10 +919,7 @@ RegisterExistingIntegrationEmbeddings <- function(
             ),
             extra
         )
-        out <- tryCatch(
-            suppressWarnings(do.call(harmony_fun, args_matrix)),
-            error = function(e) NULL
-        )
+        out <- .scprokar_harmony_attempt(harmony_fun, args_matrix)
         if (!is.null(out)) {
             return(as.matrix(out))
         }
@@ -1013,6 +967,85 @@ RegisterExistingIntegrationEmbeddings <- function(
         "or pass `integrated_reduction` explicitly.",
         call. = FALSE
     )
+}
+
+#' @keywords internal
+.scprokar_clustering_embedding <- function(sce, reduction, dims) {
+    reduction_name <- .scprokar_default_integration_reduction(
+        sce, integrated_reduction = reduction, prefer_umap = FALSE
+    )
+    emb <- as.matrix(SingleCellExperiment::reducedDim(sce, reduction_name))
+    if (!is.null(dims)) {
+        emb <- emb[, dims, drop = FALSE]
+    }
+    if (nrow(emb) < 2L) {
+        stop("Need at least two cells to run clustering.", call. = FALSE)
+    }
+    if (ncol(emb) < 2L) {
+        stop(
+            "Integrated reduction '", reduction_name,
+            "' must have at least two dimensions.", call. = FALSE
+        )
+    }
+    list(reduction = reduction_name, embedding = emb)
+}
+
+#' @keywords internal
+.scprokar_cluster_membership <- function(
+    graph, algorithm, resolution, n_cells
+) {
+    if (igraph::gsize(graph) == 0L) {
+        return(rep(1L, n_cells))
+    }
+    if (algorithm == "louvain") {
+        cluster_args <- list(graph, weights = igraph::E(graph)$weight)
+        if ("resolution" %in% names(formals(igraph::cluster_louvain))) {
+            cluster_args$resolution <- resolution
+        }
+        return(igraph::membership(do.call(
+            igraph::cluster_louvain, cluster_args
+        )))
+    }
+    if (algorithm == "leiden") {
+        return(.scprokar_leiden_membership(graph, resolution))
+    }
+    if (!is.null(resolution)) {
+        warning(
+            "`resolution` is ignored when `algorithm = \"walktrap\"` ",
+            "because walktrap does not expose a resolution parameter.",
+            call. = FALSE
+        )
+    }
+    igraph::membership(igraph::cluster_walktrap(
+        graph, weights = igraph::E(graph)$weight
+    ))
+}
+
+#' @keywords internal
+.scprokar_leiden_membership <- function(graph, resolution) {
+    if (!"cluster_leiden" %in% getNamespaceExports("igraph")) {
+        stop(
+            "The installed igraph does not provide `cluster_leiden()`. ",
+            "Use `algorithm = \"louvain\"` or upgrade igraph.",
+            call. = FALSE
+        )
+    }
+    ## Modularity keeps resolution on the same scale as Louvain, unlike
+    ## Leiden's default CPM objective, which over-partitions a kNN graph.
+    cluster_args <- list(
+        graph, weights = igraph::E(graph)$weight,
+        objective_function = "modularity"
+    )
+    leiden_formals <- names(formals(get(
+        "cluster_leiden", envir = asNamespace("igraph")
+    )))
+    ## igraph 2.1.0 renamed and deprecated `resolution_parameter`.
+    if ("resolution" %in% leiden_formals) {
+        cluster_args$resolution <- resolution
+    } else if ("resolution_parameter" %in% leiden_formals) {
+        cluster_args$resolution_parameter <- resolution
+    }
+    igraph::membership(do.call(igraph::cluster_leiden, cluster_args))
 }
 
 #' @keywords internal

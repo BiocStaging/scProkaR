@@ -10,7 +10,7 @@
     }
 
     if (is.factor(timepoint)) {
-        suppressWarnings(numeric_levels <- as.numeric(as.character(timepoint)))
+        numeric_levels <- .scprokar_numeric_labels(timepoint)
         if (!anyNA(numeric_levels)) {
             return(numeric_levels)
         }
@@ -18,7 +18,7 @@
     }
 
     if (is.character(timepoint)) {
-        suppressWarnings(numeric_values <- as.numeric(timepoint))
+        numeric_values <- .scprokar_numeric_labels(timepoint)
         if (!anyNA(numeric_values)) {
             return(numeric_values)
         }

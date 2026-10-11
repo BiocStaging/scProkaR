@@ -16,7 +16,8 @@ abstract: |
   This vignette demonstrates scProkaR using a bacterial single-cell RNA-seq
   time course with two polymyxin B concentrations and an untreated control.
   It covers data import, quality control, integration, clustering,
-  visualisation and pseudobulk differential expression with edgeR. Cell-level data are stored in a SingleCellExperiment. The integration and
+  visualisation and pseudobulk differential expression with edgeR. Cell-level
+  data are stored in a SingleCellExperiment. The integration and
   differential-expression sections explain the limitations of the example
   design.
 vignette: >
@@ -51,17 +52,18 @@ Gene identifiers may include both locus tags and gene symbols.
 The main functions used in this workflow are:
 
 * `CreateBacObject()` converts count matrices, 10x Genomics output,
-  `SingleCellExperiment` objects and Seurat objects into a
-  `SingleCellExperiment`.
+    `SingleCellExperiment` objects and Seurat objects into a
+    `SingleCellExperiment`.
 * `RunBacQC()` computes per-cell quality-control (QC) metrics, and
-  `FilterBacCells()` applies user-specified thresholds.
+    `FilterBacCells()` applies user-specified thresholds.
 * `IntegrateBacData()` computes integration embeddings;
-  `RegisterIntegrationEmbedding()` and `RegisterExistingIntegrationEmbeddings()`
-  register externally computed embeddings.
+    `RegisterIntegrationEmbedding()` and
+    `RegisterExistingIntegrationEmbeddings()`
+    register externally computed embeddings.
 * `BenchmarkIntegration()` compares embeddings using scIB-inspired metrics.
 * `aggregate_pseudobulk()`, `normalize_pseudobulk()`,
-  `run_edger_pairwise_de()` and `run_edger_spline_de()` support pseudobulk
-  differential expression with `r Biocpkg("edgeR")`.
+    `run_edger_pairwise_de()` and `run_edger_spline_de()` support pseudobulk
+    differential expression with `r Biocpkg("edgeR")`.
 * Time Aware Trajectory Analysis (TATA) is described in the companion vignette.
 
 The cell-level workflow uses `r Biocpkg("SingleCellExperiment")` as its main
@@ -252,11 +254,11 @@ compatible reductions.
 `total_counts`, `detected_features` and two ribosomal fractions:
 
 * **`rrna_fraction`** is the fraction of counts assigned to ribosomal RNA
-  genes. Its interpretation depends on the annotation and rRNA depletion
-  protocol; a high value alone does not establish cell damage.
+    genes. Its interpretation depends on the annotation and rRNA depletion
+    protocol; a high value alone does not establish cell damage.
 * **`ribo_fraction`** is the fraction assigned to ribosomal-protein genes
-  such as `rpl*` and `rps*`. Inspect its distribution across conditions before
-  deciding whether it is relevant to filtering.
+    such as `rpl*` and `rps*`. Inspect its distribution across conditions before
+    deciding whether it is relevant to filtering.
 
 Genes are classified by regular expression on the row names by default
 (`rrna_pattern = "^(rrs|rrl|rrf)"`), which matches the standard bacterial
@@ -601,13 +603,14 @@ bench$ranking
 The two families are:
 
 * **Batch removal** includes `pcr_batch`, one minus the mean fraction of
-  embedding-coordinate variance explained by batch; `ilisi`, local batch
-  mixing; and `kbet_like`, neighbourhood agreement with overall batch
-  composition. This category also includes `graph_connectivity`, which
-  measures connectivity within reference labels in the nearest-neighbour graph.
+    embedding-coordinate variance explained by batch; `ilisi`, local batch
+    mixing; and `kbet_like`, neighbourhood agreement with overall batch
+    composition. This category also includes `graph_connectivity`, which
+    measures connectivity within reference labels in the nearest-neighbour
+    graph.
 * **Biological conservation** includes `clisi`, local label purity; `ari`
-  and `nmi`, agreement between k-means clusters and reference labels; and
-  `silhouette`, separation of reference labels in the embedding.
+    and `nmi`, agreement between k-means clusters and reference labels; and
+    `silhouette`, separation of reference labels in the embedding.
 
 The `score` column is oriented so higher values indicate better performance
 under each metric. `ranking` averages the available scores for each method;
@@ -884,35 +887,35 @@ and other tools that accept this container.
 # Further reading
 
 * Amezquita RA, Lun ATL, Becht E, *et al.* (2020). Orchestrating single-cell
-  analysis with Bioconductor. *Nature Methods* 17, 137-145.
-  <https://bioconductor.org/books/release/OSCA/>
+    analysis with Bioconductor. *Nature Methods* 17, 137-145.
+    <https://bioconductor.org/books/release/OSCA/>
 * Robinson MD, McCarthy DJ, Smyth GK (2010). edgeR: a Bioconductor package for
-  differential expression analysis of digital gene expression data.
-  *Bioinformatics* 26, 139-140.
-  <https://bioconductor.org/packages/edgeR>
+    differential expression analysis of digital gene expression data.
+    *Bioinformatics* 26, 139-140.
+    <https://bioconductor.org/packages/edgeR>
 * Chen Y, Lun ATL, Smyth GK (2016). From reads to genes to pathways:
-  differential expression analysis of RNA-Seq experiments using Rsubread and
-  the edgeR quasi-likelihood pipeline. *F1000Research* 5, 1438.
+    differential expression analysis of RNA-Seq experiments using Rsubread and
+    the edgeR quasi-likelihood pipeline. *F1000Research* 5, 1438.
 * Haghverdi L, Lun ATL, Morgan MD, Marioni JC (2018). Batch effects in
-  single-cell RNA-sequencing data are corrected by matching mutual nearest
-  neighbors. *Nature Biotechnology* 36, 421-427.
-  <https://bioconductor.org/packages/batchelor>
+    single-cell RNA-sequencing data are corrected by matching mutual nearest
+    neighbors. *Nature Biotechnology* 36, 421-427.
+    <https://bioconductor.org/packages/batchelor>
 * Korsunsky I, Millard N, Fan J, *et al.* (2019). Fast, sensitive and accurate
-  integration of single-cell data with Harmony. *Nature Methods* 16,
-  1289-1296. <https://CRAN.R-project.org/package=harmony>
+    integration of single-cell data with Harmony. *Nature Methods* 16,
+    1289-1296. <https://CRAN.R-project.org/package=harmony>
 * Luecken MD, Buttner M, Chaichoompu K, *et al.* (2022). Benchmarking
-  atlas-level data integration in single-cell genomics. *Nature Methods* 19,
-  41-50. The metrics in `BenchmarkIntegration()` are inspired by this work but
-  are independent reimplementations.
+    atlas-level data integration in single-cell genomics. *Nature Methods* 19,
+    41-50. The metrics in `BenchmarkIntegration()` are inspired by this work but
+    are independent reimplementations.
 * McInnes L, Healy J, Melville J (2018). UMAP: Uniform Manifold Approximation
-  and Projection for dimension reduction. *arXiv:1802.03426*.
-  <https://CRAN.R-project.org/package=uwot>
+    and Projection for dimension reduction. *arXiv:1802.03426*.
+    <https://CRAN.R-project.org/package=uwot>
 * Lun ATL, McCarthy DJ, Marioni JC (2016). A step-by-step workflow for
-  low-level analysis of single-cell RNA-seq data with Bioconductor.
-  *F1000Research* 5, 2122. <https://bioconductor.org/packages/scran>
+    low-level analysis of single-cell RNA-seq data with Bioconductor.
+    *F1000Research* 5, 2122. <https://bioconductor.org/packages/scran>
 * Imdahl F, Vafadarnejad E, Homberger C, Saliba AE, Vogel J (2020).
-  Single-cell RNA-sequencing reports growth-condition-specific global
-  transcriptomes of individual bacteria. *Nature Microbiology* 5, 1202-1206.
+    Single-cell RNA-sequencing reports growth-condition-specific global
+    transcriptomes of individual bacteria. *Nature Microbiology* 5, 1202-1206.
 
 # Session information
 

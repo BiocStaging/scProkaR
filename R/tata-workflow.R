@@ -84,123 +84,116 @@ run_tata <- function(
     cluster_method <- match.arg(cluster_method)
     time_weight_mode <- match.arg(time_weight_mode)
 
-    .validate_tata_workflow_args(
-        sce = sce,
-        time_col = time_col,
-        use_time = use_time,
-        alpha = alpha,
-        beta = beta
+    .validate_tata_workflow_args(sce, time_col, use_time, alpha, beta)
+    # Read settings lazily, preserving argument evaluation and RNG stage order.
+    parameters <- environment()
+    .run_tata_stages(sce, parameters, root_cluster, n_pcs_if_missing)
+}
+
+
+# Prepare the cell states and the weighted abstract graph together, so that
+# downstream stages consume the same embedding, labels, and edge tables.
+.tata_graph_stage <- function(sce, parameters, n_pcs_if_missing) {
+    sce <- .ensure_reduced_dim(
+        sce, dimred = parameters$dimred, n_pcs = n_pcs_if_missing
     )
-
-    sce <- .ensure_reduced_dim(sce, dimred = dimred, n_pcs = n_pcs_if_missing)
-    knn_result <- build_knn_graph(x = sce, dimred = dimred, dims = dims, k = k)
-
+    knn_result <- build_knn_graph(
+        x = sce, dimred = parameters$dimred, dims = parameters$dims,
+        k = parameters$k
+    )
     cluster_stage <- .tata_cluster_stage(
-        sce = sce,
-        knn_result = knn_result,
-        cluster_method = cluster_method,
-        use_time = use_time,
-        time_col = time_col,
-        refine_clusters = refine_clusters,
-        refine_min_cells = refine_min_cells,
-        refine_min_split_fraction = refine_min_split_fraction
+        sce = sce, knn_result = knn_result,
+        cluster_method = parameters$cluster_method,
+        use_time = parameters$use_time, time_col = parameters$time_col,
+        refine_clusters = parameters$refine_clusters,
+        refine_min_cells = parameters$refine_min_cells,
+        refine_min_split_fraction = parameters$refine_min_split_fraction
     )
-    inferred_cluster <- cluster_stage$clusters
-    refine_min_cells <- cluster_stage$refine_min_cells
-
-    SummarizedExperiment::colData(sce)[[cluster_col]] <- inferred_cluster
-
+    clusters <- cluster_stage$clusters
+    SummarizedExperiment::colData(sce)[[parameters$cluster_col]] <- clusters
     weight_tables <- .tata_weight_tables(
-        sce = sce,
-        knn_result = knn_result,
-        clusters = inferred_cluster,
-        use_time = use_time,
-        time_col = time_col
+        sce = sce, knn_result = knn_result, clusters = clusters,
+        use_time = parameters$use_time, time_col = parameters$time_col
     )
-    topology_table <- weight_tables$topology_table
-    time_table <- weight_tables$time_table
-
-    tata_graph_result <- build_tata_graph(
-        topology_table = topology_table,
-        time_table = time_table,
-        clusters = inferred_cluster,
+    graph_result <- build_tata_graph(
+        topology_table = weight_tables$topology_table,
+        time_table = weight_tables$time_table, clusters = clusters,
         embedding = knn_result$embedding,
         timepoint = .tata_timepoint_vector(
-            sce = sce,
-            use_time = use_time,
-            time_col = time_col
+            sce, parameters$use_time, parameters$time_col
         ),
-        alpha = alpha,
-        beta = beta,
-        direction_threshold = direction_threshold,
-        prune_threshold = prune_threshold,
-        time_weight_mode = time_weight_mode
+        alpha = parameters$alpha, beta = parameters$beta,
+        direction_threshold = parameters$direction_threshold,
+        prune_threshold = parameters$prune_threshold,
+        time_weight_mode = parameters$time_weight_mode
     )
+    list(
+        sce = sce, knn = knn_result, graph = graph_result,
+        weights = weight_tables,
+        refine_min_cells = cluster_stage$refine_min_cells
+    )
+}
 
+
+# Run optional inference stages and store their shared outputs in one place.
+.run_tata_stages <- function(sce, parameters, root_cluster, n_pcs_if_missing) {
+    graph_stage <- .tata_graph_stage(sce, parameters, n_pcs_if_missing)
     pseudotime_stage <- .tata_pseudotime_stage(
-        sce = sce,
-        cluster_graph = tata_graph_result$graph,
-        cluster_col = cluster_col,
-        use_time = use_time,
-        time_col = time_col,
-        root_cluster = root_cluster,
-        do_pseudotime = do_pseudotime
+        sce = graph_stage$sce, cluster_graph = graph_stage$graph$graph,
+        cluster_col = parameters$cluster_col,
+        use_time = parameters$use_time, time_col = parameters$time_col,
+        root_cluster = root_cluster, do_pseudotime = parameters$do_pseudotime
     )
-    sce <- pseudotime_stage$sce
-    pseudotime_result <- pseudotime_stage$pseudotime
-
+    pseudotime <- pseudotime_stage$pseudotime
     branch_stage <- .tata_branch_stage(
-        sce = sce,
-        cluster_graph = tata_graph_result$graph,
-        pseudotime_result = pseudotime_result,
-        cluster_col = cluster_col,
-        expected_branches = expected_branches,
-        do_branch_probs = do_branch_probs
+        sce = pseudotime_stage$sce, cluster_graph = graph_stage$graph$graph,
+        pseudotime_result = pseudotime, cluster_col = parameters$cluster_col,
+        expected_branches = parameters$expected_branches,
+        do_branch_probs = parameters$do_branch_probs
+    )
+    branch <- branch_stage$branch
+    cell_space <- .compute_tata_cell_space(
+        embedding = graph_stage$knn$embedding,
+        pseudotime = pseudotime$cell_pseudotime_scaled,
+        branch_probabilities = branch$branch_probabilities,
+        branch_probability_columns = branch$branch_probability_columns
     )
     sce <- branch_stage$sce
-    branch_result <- branch_stage$branch
-
-    cell_space <- .compute_tata_cell_space(
-        embedding = knn_result$embedding,
-        pseudotime = pseudotime_result$cell_pseudotime_scaled,
-        branch_probabilities = branch_result$branch_probabilities,
-        branch_probability_columns = branch_result$branch_probability_columns
-    )
     SingleCellExperiment::reducedDim(sce, "TATA") <- cell_space
-
-    parameters <- list(
-        dimred = dimred,
-        dims = dims,
-        time_col = time_col,
-        use_time = use_time,
-        cluster_col = cluster_col,
-        k = knn_result$k,
-        knn_engine = knn_result$knn_engine,
-        cluster_method = cluster_method,
-        alpha = alpha,
-        beta = beta,
-        direction_threshold = direction_threshold,
-        prune_threshold = prune_threshold,
-        time_weight_mode = time_weight_mode,
-        do_pseudotime = do_pseudotime,
-        refine_clusters = refine_clusters,
-        refine_min_cells = refine_min_cells,
-        refine_min_split_fraction = refine_min_split_fraction,
-        do_branch_probs = do_branch_probs,
-        expected_branches = expected_branches,
-        root_cluster = pseudotime_result$root_cluster
-    )
-
+    parameters <- .tata_recorded_parameters(parameters, graph_stage, pseudotime)
     .assemble_tata_result(
-        sce = sce,
-        knn_result = knn_result,
-        tata_graph_result = tata_graph_result,
-        pseudotime_result = pseudotime_result,
-        branch_result = branch_result,
-        cell_space = cell_space,
-        topology_table = topology_table,
-        time_table = time_table,
-        parameters = parameters
+        sce = sce, knn_result = graph_stage$knn,
+        tata_graph_result = graph_stage$graph, pseudotime_result = pseudotime,
+        branch_result = branch, cell_space = cell_space,
+        topology_table = graph_stage$weights$topology_table,
+        time_table = graph_stage$weights$time_table, parameters = parameters
+    )
+}
+
+
+# Convert lazy settings into the public metadata only after all stages finish.
+.tata_recorded_parameters <- function(settings, graph_stage, pseudotime) {
+    list(
+        dimred = settings$dimred,
+        dims = settings$dims,
+        time_col = settings$time_col,
+        use_time = settings$use_time,
+        cluster_col = settings$cluster_col,
+        k = graph_stage$knn$k,
+        knn_engine = graph_stage$knn$knn_engine,
+        cluster_method = settings$cluster_method,
+        alpha = settings$alpha,
+        beta = settings$beta,
+        direction_threshold = settings$direction_threshold,
+        prune_threshold = settings$prune_threshold,
+        time_weight_mode = settings$time_weight_mode,
+        do_pseudotime = settings$do_pseudotime,
+        refine_clusters = settings$refine_clusters,
+        refine_min_cells = graph_stage$refine_min_cells,
+        refine_min_split_fraction = settings$refine_min_split_fraction,
+        do_branch_probs = settings$do_branch_probs,
+        expected_branches = settings$expected_branches,
+        root_cluster = pseudotime$root_cluster
     )
 }
 

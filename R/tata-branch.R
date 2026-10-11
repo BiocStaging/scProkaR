@@ -648,33 +648,37 @@ cluster_tata_gene_trends <- function(
         mode = "collapse"
     )
     lapply(targets, function(target_cluster) {
-        path_vertices <- suppressWarnings(
-            igraph::shortest_paths(
-                cluster_graph,
-                from = root_cluster,
-                to = target_cluster,
-                mode = "out",
-                weights = 1 / pmax(igraph::E(cluster_graph)$weight, 1e-8)
-            )$vpath[[1]]
+        path_vertices <- .tata_shortest_path_vertices(
+            cluster_graph, root_cluster, target_cluster, mode = "out"
         )
 
         if (length(path_vertices) == 0L) {
-            path_vertices <- suppressWarnings(
-                igraph::shortest_paths(
-                    undirected_graph,
-                    from = root_cluster,
-                    to = target_cluster,
-                    mode = "all",
-                    weights = 1 / pmax(
-                        igraph::E(undirected_graph)$weight,
-                        1e-8
-                    )
-                )$vpath[[1]]
+            path_vertices <- .tata_shortest_path_vertices(
+                undirected_graph, root_cluster, target_cluster, mode = "all"
             )
         }
 
         igraph::V(cluster_graph)$name[as.integer(path_vertices)]
     })
+}
+
+.tata_shortest_path_vertices <- function(graph, from, to, mode) {
+    ## Check topology before requesting a weighted route. An unreachable target
+    ## is an expected empty path, while warnings about a reachable route remain
+    ## visible to the caller.
+    reachable <- igraph::distances(
+        graph, v = from, to = to, mode = mode, weights = NA
+    )[1]
+    if (!is.finite(reachable)) {
+        return(igraph::V(graph)[integer()])
+    }
+    igraph::shortest_paths(
+        graph,
+        from = from,
+        to = to,
+        mode = mode,
+        weights = 1 / pmax(igraph::E(graph)$weight, 1e-8)
+    )$vpath[[1]]
 }
 
 
@@ -1036,49 +1040,45 @@ cluster_tata_gene_trends <- function(
         length(trend_grid)
     )
 
-    fit_obj <- tryCatch(
-        suppressWarnings(
-            stats::loess(
-                expression ~ pseudotime,
-                data = fit_df,
-                weights = weight,
-                span = span
-            )
+    fit_obj <- .tata_fit_attempt(
+        stats::loess(
+            expression ~ pseudotime,
+            data = fit_df,
+            weights = weight,
+            span = span
         ),
-        error = function(e) NULL
+        fallback = NULL
     )
 
     fitted_value <- if (is.null(fit_obj)) {
         rep(NA_real_, length(trend_grid))
     } else {
-        tryCatch(
-            suppressWarnings(
-                stats::predict(
-                    fit_obj,
-                    newdata = data.frame(pseudotime = trend_grid)
-                )
+        .tata_fit_attempt(
+            stats::predict(
+                fit_obj,
+                newdata = data.frame(pseudotime = trend_grid)
             ),
-            error = function(e) rep(NA_real_, length(trend_grid))
+            fallback = rep(NA_real_, length(trend_grid))
         )
     }
 
     if (all(is.na(fitted_value))) {
-        spline_fit <- tryCatch(
+        spline_fit <- .tata_fit_attempt(
             stats::smooth.spline(
                 x = fit_df$pseudotime,
                 y = fit_df$expression,
                 w = fit_df$weight,
                 spar = 0.6
             ),
-            error = function(e) NULL
+            fallback = NULL
         )
 
         if (is.null(spline_fit)) {
             fitted_value <- fallback_value
         } else {
-            fitted_value <- tryCatch(
+            fitted_value <- .tata_fit_attempt(
                 stats::predict(spline_fit, x = trend_grid)$y,
-                error = function(e) fallback_value
+                fallback = fallback_value
             )
         }
     } else if (anyNA(fitted_value)) {
@@ -1092,6 +1092,31 @@ cluster_tata_gene_trends <- function(
     }
 
     fitted_value
+}
+
+.tata_fit_attempt <- function(expr, fallback) {
+    state <- new.env(parent = emptyenv())
+    state$converted_warning <- NULL
+    tryCatch(
+        withCallingHandlers(
+            expr,
+            warning = function(w) {
+                state$converted_warning <- gettextf(
+                    "(converted from warning) %s", conditionMessage(w),
+                    domain = "R"
+                )
+            }
+        ),
+        error = function(e) {
+            ## Preserve warn = 2 without confusing an ordinary fit error with
+            ## the error that R creates when it promotes a numerical warning.
+            if (getOption("warn", 0) >= 2 &&
+                    identical(conditionMessage(e), state$converted_warning)) {
+                stop(e)
+            }
+            fallback
+        }
+    )
 }
 
 

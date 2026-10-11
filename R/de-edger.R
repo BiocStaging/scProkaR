@@ -1,5 +1,15 @@
 # Internal helpers for the edgeR workflows.
 
+.scprokar_numeric_labels <- function(values) {
+    ## Use R's parser to check the whole vector without coercion warnings.
+    ## Logical and complex labels must retain their categorical ordering.
+    converted <- utils::type.convert(as.character(values), as.is = TRUE)
+    if (is.numeric(converted) && !is.complex(converted)) {
+        return(as.numeric(converted))
+    }
+    rep(NA_real_, length(values))
+}
+
 .most_frequent_value <- function(x) {
     x <- x[!is.na(x)]
     if (!length(x)) {
@@ -26,7 +36,7 @@
     }
 
     unique_vals <- unique(as.character(values))
-    suppressWarnings(numeric_vals <- as.numeric(unique_vals))
+    numeric_vals <- .scprokar_numeric_labels(unique_vals)
     if (!anyNA(numeric_vals)) {
         return(as.character(unique_vals[order(numeric_vals)][1]))
     }
@@ -45,7 +55,7 @@
             return(factor(as.character(values), levels = levels(values)))
         }
         values_chr <- as.character(values)
-        suppressWarnings(values_num <- as.numeric(values_chr))
+        values_num <- .scprokar_numeric_labels(values_chr)
         if (!anyNA(values_num)) {
             ordered_levels <- unique(values_chr[order(values_num)])
             return(factor(values_chr, levels = ordered_levels))

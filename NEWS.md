@@ -1,3 +1,16 @@
+# scProkaR 0.99.2
+
+## Maintenance
+
+* Add the maintainer's verified ORCID to the package author metadata.
+* Replace blanket warning suppression with explicit handling of numeric
+  labels, undefined correlations and unreachable graph paths. Preserve
+  meaningful warnings from model fitting and Harmony backends.
+* Extract workflow and clustering stages into internal helpers, retaining
+  the public interfaces and processing metadata.
+* Wrap vignette prose and align continuation lines consistently while
+  preserving the rendered Markdown structure.
+
 # scProkaR 0.99.1
 
 ## Fixes
