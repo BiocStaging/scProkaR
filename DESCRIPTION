@@ -8,7 +8,10 @@ Authors@R:
             role = c("aut", "cre"),
             comment = c(ORCID = "0000-0002-0604-3541")),
         person("Ning", "Liu", email = "ning.liu@adelaide.edu.au",
-            role = "aut")
+            role = "aut"),
+        person(given = "Alexander von Humboldt Foundation",
+            role = "fnd",
+            comment = "Fellowship support for Jinxin Zhao")
     )
 Description: scProkaR provides a SingleCellExperiment-centred workflow for
     microbial single-cell RNA sequencing data. It standardises bacterial
