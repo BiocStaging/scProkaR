@@ -70,15 +70,13 @@ BenchmarkIntegration <- function(
         stop("No reduced dimensions are available to benchmark.", call. = FALSE)
     }
 
-    batch <- as.factor(SummarizedExperiment::colData(sce)[[batch_col]])
-    labels <- if (!is.null(label_col)) as.factor(
-        SummarizedExperiment::colData(sce)[[label_col]]
-    ) else NULL
+    batch <- as.factor(colData(sce)[[batch_col]])
+    labels <- if (!is.null(label_col)) as.factor(colData(sce)[[label_col]])
     scores <- do.call(
         rbind,
         lapply(names(reductions), function(method_name) {
             reduction_name <- reductions[[method_name]]
-            emb <- SingleCellExperiment::reducedDim(sce, reduction_name)
+            emb <- reducedDim(sce, reduction_name)
             .scprokar_score_reduction(
                 emb = emb,
                 batch = batch,
@@ -127,8 +125,12 @@ BenchmarkIntegration <- function(
             graph_connectivity = .scprokar_metric_graph_connectivity(
                 graph, labels
             ),
-            ari = .scprokar_metric_ari(cluster_assign, labels),
-            nmi = .scprokar_metric_nmi(cluster_assign, labels),
+            ari = .scprokar_metric_agreement(
+                cluster_assign, labels, .scprokar_adjusted_rand_index
+            ),
+            nmi = .scprokar_metric_agreement(
+                cluster_assign, labels, .scprokar_nmi
+            ),
             silhouette = .scprokar_metric_silhouette(emb, labels),
             stop("Unknown metric: ", metric, call. = FALSE)
         )
@@ -155,46 +157,45 @@ BenchmarkIntegration <- function(
     factor(stats::kmeans(emb, centers = k, iter.max = 25)$cluster)
 }
 
+.scprokar_metric_result <- function(value = NA_real_, score = value) {
+    list(value = value, score = score, higher_better = TRUE)
+}
+
 #' @keywords internal
 .scprokar_metric_pcr_batch <- function(emb, batch) {
     if (length(unique(batch)) < 2) {
-        return(list(value = 1, score = 1, higher_better = TRUE))
+        return(.scprokar_metric_result(1))
     }
     per_dim <- apply(emb, 2, function(dim_values) {
         fit <- stats::lm(dim_values ~ batch)
         summary(fit)$r.squared
     })
-    score <- 1 - mean(per_dim)
-    list(value = score, score = score, higher_better = TRUE)
+    .scprokar_metric_result(1 - mean(per_dim))
 }
 
 #' @keywords internal
 .scprokar_metric_lisi <- function(idx, labels, mode = c("mixing", "purity")) {
     mode <- match.arg(mode)
     if (is.null(labels) || ncol(idx) == 0) {
-        return(list(value = NA_real_, score = NA_real_, higher_better = TRUE))
+        return(.scprokar_metric_result())
     }
     labels <- as.factor(labels)
     n_levels <- length(levels(labels))
     if (n_levels <= 1) {
-        return(list(value = 1, score = 1, higher_better = TRUE))
+        return(.scprokar_metric_result(1))
     }
     lisi <- apply(idx, 1, function(neighbors) {
         props <- prop.table(table(labels[neighbors]))
         1 / sum(props^2)
     })
-    if (mode == "mixing") {
-        score <- mean((lisi - 1) / (n_levels - 1))
-        return(list(value = mean(lisi), score = score, higher_better = TRUE))
-    }
-    score <- mean(1 / lisi)
-    list(value = mean(lisi), score = score, higher_better = TRUE)
+    score <- if (mode == "mixing") (lisi - 1) / (n_levels - 1) else 1 / lisi
+    .scprokar_metric_result(mean(lisi), mean(score))
 }
 
 #' @keywords internal
 .scprokar_metric_kbet_like <- function(idx, batch) {
     if (ncol(idx) == 0 || length(unique(batch)) < 2) {
-        return(list(value = 1, score = 1, higher_better = TRUE))
+        return(.scprokar_metric_result(1))
     }
     batch <- as.factor(batch)
     global <- prop.table(table(batch))
@@ -204,14 +205,13 @@ BenchmarkIntegration <- function(
         ))
         sum(abs(local - global)) / 2
     })
-    score <- 1 - mean(deviation)
-    list(value = score, score = score, higher_better = TRUE)
+    .scprokar_metric_result(1 - mean(deviation))
 }
 
 #' @keywords internal
 .scprokar_metric_graph_connectivity <- function(graph, labels) {
     if (is.null(labels)) {
-        return(list(value = NA_real_, score = NA_real_, higher_better = TRUE))
+        return(.scprokar_metric_result())
     }
     labels <- as.factor(labels)
     g <- igraph::graph_from_adjacency_matrix(
@@ -228,40 +228,25 @@ BenchmarkIntegration <- function(
         comps <- igraph::components(subgraph)$csize
         max(comps) / length(nodes)
     }, numeric(1))
-    score <- mean(connectivity)
-    list(value = score, score = score, higher_better = TRUE)
+    .scprokar_metric_result(mean(connectivity))
 }
 
-#' @keywords internal
-.scprokar_metric_ari <- function(cluster_assign, labels) {
-    if (is.null(labels)) {
-        return(list(value = NA_real_, score = NA_real_, higher_better = TRUE))
-    }
-    value <- .scprokar_adjusted_rand_index(cluster_assign, labels)
-    list(value = value, score = value, higher_better = TRUE)
-}
-
-#' @keywords internal
-.scprokar_metric_nmi <- function(cluster_assign, labels) {
-    if (is.null(labels)) {
-        return(list(value = NA_real_, score = NA_real_, higher_better = TRUE))
-    }
-    value <- .scprokar_nmi(cluster_assign, labels)
-    list(value = value, score = value, higher_better = TRUE)
+.scprokar_metric_agreement <- function(cluster_assign, labels, fun) {
+    .scprokar_metric_result(
+        if (is.null(labels)) NA_real_ else fun(cluster_assign, labels)
+    )
 }
 
 #' @keywords internal
 .scprokar_metric_silhouette <- function(emb, labels) {
-    if (is.null(labels) || length(unique(labels)) < 2) {
-        return(list(value = NA_real_, score = NA_real_, higher_better = TRUE))
-    }
-    if (!requireNamespace("cluster", quietly = TRUE)) {
-        return(list(value = NA_real_, score = NA_real_, higher_better = TRUE))
+    if (is.null(labels) || length(unique(labels)) < 2 ||
+            !requireNamespace("cluster", quietly = TRUE)) {
+        return(.scprokar_metric_result())
     }
     dist_obj <- stats::dist(emb)
     sil <- cluster::silhouette(as.integer(as.factor(labels)), dist_obj)
     avg <- mean(sil[, "sil_width"])
-    list(value = avg, score = (avg + 1) / 2, higher_better = TRUE)
+    .scprokar_metric_result(avg, (avg + 1) / 2)
 }
 
 #' @keywords internal

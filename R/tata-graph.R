@@ -42,7 +42,7 @@ build_knn_graph <- function(
     ## weight of 2 to mutual neighbours, so collapse every non-zero entry to 1
     ## rather than reaching into the Matrix object's slots.
     adjacency <- adjacency + Matrix::t(adjacency)
-    adjacency <- methods::as(adjacency > 0, "dMatrix")
+    adjacency <- as(adjacency > 0, "dMatrix")
     diag(adjacency) <- 0
     adjacency <- Matrix::drop0(adjacency)
 

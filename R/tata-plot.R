@@ -225,7 +225,7 @@ plot_tata_trajectory_embedding <- function(
     label_size = 3
 ) {
     sce <- tata_result$sce
-    if (!methods::is(sce, "SingleCellExperiment")) {
+    if (!is(sce, "SingleCellExperiment")) {
         stop("`tata_result$sce` must be a SingleCellExperiment.", call. = FALSE)
     }
 
@@ -463,7 +463,7 @@ plot_tata_time_calibration <- function(
 ) {
     summary <- match.arg(summary)
     sce <- tata_result$sce
-    meta <- as.data.frame(SummarizedExperiment::colData(sce))
+    meta <- as.data.frame(colData(sce))
 
     if (is.null(time_col)) {
         time_col <- tata_result$parameters$time_col
@@ -571,7 +571,7 @@ plot_tata_branch_confusion <- function(
     normalize = c("truth", "predicted", "none")
 ) {
     normalize <- match.arg(normalize)
-    meta <- as.data.frame(SummarizedExperiment::colData(tata_result$sce))
+    meta <- as.data.frame(colData(tata_result$sce))
     if (!truth_col %in% colnames(meta) || !predicted_col %in% colnames(meta)) {
         stop(
             "Both `truth_col` and `predicted_col` must be present in ",
@@ -652,7 +652,7 @@ plot_tata_branch_probabilities <- function(
     ncol = 2
 ) {
     sce <- tata_result$sce
-    if (!dimred %in% SingleCellExperiment::reducedDimNames(sce)) {
+    if (!dimred %in% reducedDimNames(sce)) {
         stop(
             "Reduced dimension `", dimred,
             "` is not present in `tata_result$sce`.",
@@ -673,11 +673,9 @@ plot_tata_branch_probabilities <- function(
     }
     branch_cols <- .make_tata_probability_colnames(branches)
 
-    embedding <- as.matrix(SingleCellExperiment::reducedDim(sce, dimred))
     plot_df <- data.frame(
         cell_id = colnames(sce),
-        Dim1 = embedding[, 1],
-        Dim2 = embedding[, 2],
+        .tata_embedding_df(sce, dimred),
         branch_prob_df[, branch_cols, drop = FALSE],
         check.names = FALSE,
         stringsAsFactors = FALSE
@@ -756,11 +754,9 @@ plot_tata_branch_selection <- function(
         probability_threshold = probability_threshold
     )
     sce <- tata_result$sce
-    embedding <- as.matrix(SingleCellExperiment::reducedDim(sce, dimred))
     plot_df <- data.frame(
         cell_id = colnames(sce),
-        Dim1 = embedding[, 1],
-        Dim2 = embedding[, 2],
+        .tata_embedding_df(sce, dimred),
         selection_df[
             match(colnames(sce), selection_df$cell_id),
             c("probability", "selected"),
@@ -985,8 +981,7 @@ plot_tata_gene_trend_heatmap <- function(
     trend_df$gene_branch <- paste(trend_df$gene, trend_df$branch, sep = " | ")
 
     if (isTRUE(scale_rows)) {
-        split_idx <- split(seq_len(nrow(trend_df)), trend_df$gene_branch)
-        for (idx in split_idx) {
+        trend_df <- Reduce(function(trend_df, idx) {
             value <- trend_df$fitted_expression[idx]
             value_sd <- stats::sd(value, na.rm = TRUE)
             if (is.finite(value_sd) && value_sd > 0) {
@@ -994,7 +989,8 @@ plot_tata_gene_trend_heatmap <- function(
             } else {
                 trend_df$fitted_expression[idx] <- 0
             }
-        }
+            trend_df
+        }, split(seq_len(nrow(trend_df)), trend_df$gene_branch), trend_df)
         trend_df$fitted_expression[is.na(trend_df$fitted_expression)] <- 0
     }
 
@@ -1073,12 +1069,10 @@ plot_tata_results <- function(
     n_probability_cells = 6
 ) {
     sce <- tata_result$sce
-    embedding <- as.matrix(SingleCellExperiment::reducedDim(sce, dimred))
     plot_df <- data.frame(
-        Dim1 = embedding[, 1],
-        Dim2 = embedding[, 2],
-        pseudotime = SummarizedExperiment::colData(sce)$tata_pseudotime_scaled,
-        entropy = SummarizedExperiment::colData(sce)$tata_branch_entropy,
+        .tata_embedding_df(sce, dimred),
+        pseudotime = colData(sce)$tata_pseudotime_scaled,
+        entropy = colData(sce)$tata_branch_entropy,
         stringsAsFactors = FALSE
     )
 
@@ -1127,6 +1121,12 @@ plot_tata_results <- function(
 }
 
 
+.tata_embedding_df <- function(sce, dimred) {
+    embedding <- as.matrix(reducedDim(sce, dimred))
+    data.frame(Dim1 = embedding[, 1], Dim2 = embedding[, 2])
+}
+
+
 #' Resolve the embedding context for the TATA cluster-graph layout
 #'
 #' Validates the reduced dimension and cluster column, then returns the
@@ -1138,7 +1138,7 @@ plot_tata_results <- function(
     tata_result, dimred, cluster_col
 ) {
     sce <- tata_result$sce
-    if (!methods::is(sce, "SingleCellExperiment")) {
+    if (!is(sce, "SingleCellExperiment")) {
         stop(
             "`layout_mode = \"embedding\"` requires `tata_result$sce` to ",
             "be a SingleCellExperiment.",
@@ -1147,7 +1147,7 @@ plot_tata_results <- function(
     }
 
     if (is.null(dimred)) {
-        if ("UMAP" %in% SingleCellExperiment::reducedDimNames(sce)) {
+        if ("UMAP" %in% reducedDimNames(sce)) {
             dimred <- "UMAP"
         } else {
             stop(
@@ -1157,7 +1157,7 @@ plot_tata_results <- function(
         }
     }
 
-    if (!dimred %in% SingleCellExperiment::reducedDimNames(sce)) {
+    if (!dimred %in% reducedDimNames(sce)) {
         stop(
             "Reduced dimension `", dimred,
             "` is not present in `tata_result$sce`.",
@@ -1168,9 +1168,7 @@ plot_tata_results <- function(
     if (is.null(cluster_col)) {
         cluster_col <- tata_result$parameters$cluster_col
     }
-
-    if (is.null(cluster_col) || !cluster_col %in%
-            colnames(SummarizedExperiment::colData(sce))) {
+if (is.null(cluster_col) || !cluster_col %in% colnames(colData(sce))) {
         stop(
             "A valid `cluster_col` is required for `layout_mode = ",
             "\"embedding\"`.",
@@ -1178,7 +1176,7 @@ plot_tata_results <- function(
         )
     }
 
-    embedding <- as.matrix(SingleCellExperiment::reducedDim(sce, dimred))
+    embedding <- as.matrix(reducedDim(sce, dimred))
     if (ncol(embedding) < 2L) {
         stop(
             "The requested reduced dimension must contain at least two ",
@@ -1187,7 +1185,7 @@ plot_tata_results <- function(
         )
     }
 
-    meta <- as.data.frame(SummarizedExperiment::colData(sce))
+    meta <- as.data.frame(colData(sce))
     meta$cluster_plot <- as.character(meta[[cluster_col]])
     meta$Dim1 <- embedding[, 1]
     meta$Dim2 <- embedding[, 2]
@@ -1202,7 +1200,7 @@ plot_tata_results <- function(
 #' @noRd
 .tata_cluster_embedding_nodes <- function(meta, graph_vertex_df) {
     node_df <- stats::aggregate(
-        meta[, c("Dim1", "Dim2")],
+        meta[, c("Dim1", "Dim2"), drop = FALSE],
         by = list(cluster = meta$cluster_plot),
         FUN = stats::median
     )
@@ -1502,7 +1500,7 @@ plot_tata_results <- function(
 #' @keywords internal
 #' @noRd
 .tata_trajectory_meta <- function(sce, dimred, cluster_col) {
-    if (!dimred %in% SingleCellExperiment::reducedDimNames(sce)) {
+    if (!dimred %in% reducedDimNames(sce)) {
         stop(
             "Reduced dimension `", dimred,
             "` is not present in `tata_result$sce`.",
@@ -1510,7 +1508,7 @@ plot_tata_results <- function(
         )
     }
 
-    embedding <- as.matrix(SingleCellExperiment::reducedDim(sce, dimred))
+    embedding <- as.matrix(reducedDim(sce, dimred))
     if (ncol(embedding) < 2L) {
         stop(
             "The requested reduced dimension must contain at least two ",
@@ -1519,7 +1517,7 @@ plot_tata_results <- function(
         )
     }
 
-    meta <- as.data.frame(SummarizedExperiment::colData(sce))
+    meta <- as.data.frame(colData(sce))
     meta$Dim1 <- embedding[, 1]
     meta$Dim2 <- embedding[, 2]
     meta$cluster_plot <- meta[[cluster_col]]
@@ -1533,7 +1531,7 @@ plot_tata_results <- function(
 #' @noRd
 .tata_trajectory_centroids <- function(meta, cluster_pt) {
     cluster_centroids <- stats::aggregate(
-        meta[, c("Dim1", "Dim2")],
+        meta[, c("Dim1", "Dim2"), drop = FALSE],
         by = list(cluster = as.character(meta$cluster_plot)),
         FUN = stats::median
     )
@@ -1681,7 +1679,6 @@ plot_tata_results <- function(
     .tata_trajectory_curves(path_info_list, smooth_paths, n_curve_points)
 }
 
-
 #' Find the vertices of one root-to-terminal route
 #'
 #' Uses the directed subgraph first and falls back to its undirected
@@ -1714,8 +1711,7 @@ plot_tata_results <- function(
     subgraph, undirected_subgraph, terminal_clusters, root_cluster,
     cluster_centroids, cluster_pt_lookup
 ) {
-    path_info_list <- vector("list", length(terminal_clusters))
-    for (i in seq_along(terminal_clusters)) {
+    path_info_list <- lapply(seq_along(terminal_clusters), function(i) {
         terminal_cluster <- terminal_clusters[i]
         path_vertices <- .tata_trajectory_path_vertices(
             subgraph, undirected_subgraph, root_cluster, terminal_cluster
@@ -1728,11 +1724,11 @@ plot_tata_results <- function(
             drop = FALSE
         ]
         path_df <- path_df[
-            stats::complete.cases(path_df[, c("Dim1", "Dim2")]), ,
+            stats::complete.cases(path_df$Dim1, path_df$Dim2), ,
             drop = FALSE
         ]
         if (nrow(path_df) < 2L) {
-            next
+            return(NULL)
         }
 
         terminal_pt <- cluster_pt_lookup[terminal_cluster]
@@ -1740,13 +1736,13 @@ plot_tata_results <- function(
             terminal_pt <- nrow(path_df)
         }
 
-        path_info_list[[i]] <- list(
+        list(
             terminal_cluster = terminal_cluster,
             terminal_pseudotime = terminal_pt,
             path_clusters = path_clusters,
             path_df = path_df
         )
-    }
+    })
 
     Filter(Negate(is.null), path_info_list)
 }
@@ -1779,8 +1775,7 @@ plot_tata_results <- function(
 .tata_trajectory_curves <- function(
     path_info_list, smooth_paths, n_curve_points
 ) {
-    curve_list <- vector("list", length(path_info_list))
-    for (i in seq_along(path_info_list)) {
+    do.call(rbind, lapply(seq_along(path_info_list), function(i) {
         path_df <- path_info_list[[i]]$path_df
 
         if (isTRUE(smooth_paths) && nrow(path_df) >= 4L) {
@@ -1795,27 +1790,20 @@ plot_tata_results <- function(
                 min(spline_index), max(spline_index),
                 length.out = n_curve_points
             )
-            curve_df <- data.frame(
-                path_id = paste0("path_", i),
-                terminal_cluster = path_info_list[[i]]$terminal_cluster,
+            path_df <- list(
                 Dim1 = stats::predict(x_spline, x = new_index)$y,
-                Dim2 = stats::predict(y_spline, x = new_index)$y,
-                stringsAsFactors = FALSE
-            )
-        } else {
-            curve_df <- data.frame(
-                path_id = paste0("path_", i),
-                terminal_cluster = path_info_list[[i]]$terminal_cluster,
-                Dim1 = path_df$Dim1,
-                Dim2 = path_df$Dim2,
-                stringsAsFactors = FALSE
+                Dim2 = stats::predict(y_spline, x = new_index)$y
             )
         }
 
-        curve_list[[i]] <- curve_df
-    }
-
-    do.call(rbind, Filter(Negate(is.null), curve_list))
+        data.frame(
+            path_id = paste0("path_", i),
+            terminal_cluster = path_info_list[[i]]$terminal_cluster,
+            Dim1 = path_df$Dim1,
+            Dim2 = path_df$Dim2,
+            stringsAsFactors = FALSE
+        )
+    }))
 }
 
 

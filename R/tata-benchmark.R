@@ -114,7 +114,7 @@ local_temporal_order_metrics <- function(
     timepoint
 ) {
     if (!inherits(adjacency, "sparseMatrix")) {
-        adjacency <- methods::as(adjacency, "dgCMatrix")
+        adjacency <- as(adjacency, "dgCMatrix")
     }
 
     pseudotime <- as.numeric(pseudotime)
@@ -355,16 +355,13 @@ branch_onset_metrics <- function(
         stringsAsFactors = FALSE
     )
 
-    for (i in seq_along(branch_names)) {
-        idx <- which(keep & branch == branch_names[i])
-        onset_table$n_committed_cells[i] <- length(idx)
-        if (length(idx) > 0L) {
-            onset_table$inferred_onset[i] <- stats::median(
-                pseudotime[idx],
-                na.rm = TRUE
-            )
-        }
-    }
+    committed <- lapply(branch_names, function(b) {
+        pseudotime[which(keep & branch == b)]
+    })
+    onset_table$inferred_onset <- vapply(
+        committed, stats::median, numeric(1), na.rm = TRUE
+    )
+    onset_table$n_committed_cells <- lengths(committed)
 
     valid <- is.finite(onset_table$true_onset) &
         is.finite(onset_table$inferred_onset)
@@ -688,20 +685,17 @@ anticausal_edge_mass <- function(
     time_levels,
     min_cells
 ) {
-    pair_rows <- list()
-    pair_idx <- 0L
-
-    for (group_name in unique(group)) {
+    pair_rows <- lapply(unique(group), function(group_name) {
         idx_group <- which(
             group == group_name &
                 is.finite(pseudotime) &
                 is.finite(time_numeric)
         )
         if (length(idx_group) == 0L) {
-            next
+            return(NULL)
         }
 
-        for (k in seq_len(length(time_levels) - 1L)) {
+        lapply(seq_len(length(time_levels) - 1L), function(k) {
             earlier <- time_levels[k]
             later <- time_levels[k + 1L]
             idx_earlier <- idx_group[time_numeric[idx_group] == earlier]
@@ -709,31 +703,28 @@ anticausal_edge_mass <- function(
 
             if (length(idx_earlier) < min_cells ||
                     length(idx_later) < min_cells) {
-                next
+                return(NULL)
             }
 
             n_earlier <- length(idx_earlier)
             n_later <- length(idx_later)
-            auc_value <- .mann_whitney_auc(
-                pseudotime[idx_earlier],
-                pseudotime[idx_later]
-            )
-
-            pair_idx <- pair_idx + 1L
-            pair_rows[[pair_idx]] <- data.frame(
+            data.frame(
                 group = group_name,
                 time_earlier = earlier,
                 time_later = later,
                 n_earlier = n_earlier,
                 n_later = n_later,
-                auc = auc_value,
+                auc = .mann_whitney_auc(
+                    pseudotime[idx_earlier],
+                    pseudotime[idx_later]
+                ),
                 weight = n_earlier * n_later,
                 stringsAsFactors = FALSE
             )
-        }
-    }
+        })
+    })
 
-    pair_rows
+    Filter(Negate(is.null), Reduce(c, pair_rows, list()))
 }
 
 
@@ -817,19 +808,12 @@ anticausal_edge_mass <- function(
     min_time_gap,
     weight_by
 ) {
-    pair_rows <- list()
-    pair_idx <- 0L
-
-    for (cluster_a in cluster_names) {
-        for (cluster_b in cluster_names) {
-            if (identical(cluster_a, cluster_b)) {
-                next
-            }
-
+    pair_rows <- lapply(cluster_names, function(cluster_a) {
+        lapply(setdiff(cluster_names, cluster_a), function(cluster_b) {
             time_gap <- cluster_median_time[[cluster_b]] -
                 cluster_median_time[[cluster_a]]
             if (!is.finite(time_gap) || time_gap <= min_time_gap) {
-                next
+                return(NULL)
             }
 
             forward_reachable <- .cluster_reachable(
@@ -839,8 +823,7 @@ anticausal_edge_mass <- function(
                 cluster_graph, cluster_b, cluster_a
             )
 
-            pair_idx <- pair_idx + 1L
-            pair_rows[[pair_idx]] <- data.frame(
+            data.frame(
                 cluster_earlier = cluster_a,
                 cluster_later = cluster_b,
                 median_time_earlier = cluster_median_time[[cluster_a]],
@@ -860,8 +843,8 @@ anticausal_edge_mass <- function(
                 },
                 stringsAsFactors = FALSE
             )
-        }
-    }
+        })
+    })
 
-    pair_rows
+    Filter(Negate(is.null), Reduce(c, pair_rows, list()))
 }

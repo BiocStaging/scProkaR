@@ -130,8 +130,8 @@
 }
 
 
-.prepare_edger_dge <- function(counts, meta, normalization = "TMM") {
-    dge <- edgeR::DGEList(counts = as.matrix(counts), samples = meta)
+.prepare_edger_dge <- function(counts, meta = NULL, normalization = "TMM") {
+    dge <- edgeR::DGEList(counts = counts, samples = meta)
     if (!is.null(normalization) && normalization != "none") {
         dge <- edgeR::calcNormFactors(dge, method = normalization)
     } else {
@@ -179,10 +179,7 @@
 
     all_cols <- unique(unlist(lapply(df_list, colnames), use.names = FALSE))
     df_list <- lapply(df_list, function(df) {
-        missing_cols <- setdiff(all_cols, colnames(df))
-        for (nm in missing_cols) {
-            df[[nm]] <- rep(NA, nrow(df))
-        }
+        df[setdiff(all_cols, colnames(df))] <- list(rep(NA, nrow(df)))
         df[, all_cols, drop = FALSE]
     })
 
@@ -197,39 +194,18 @@
         return(data.frame())
     }
 
-    coef_mat <- stats::coef(one_result$fit)
-    available_genes <- rownames(coef_mat)
+    available_genes <- rownames(stats::coef(one_result$fit))
     if (is.null(genes)) {
         genes <- available_genes
     }
-    genes <- intersect(as.character(genes), available_genes)
-    if (!length(genes)) {
-        return(data.frame())
-    }
-
-    coef_mat <- coef_mat[genes, , drop = FALSE]
-    pred_eta <- coef_mat %*% t(one_result$curve_design)
-    pred_lcpm <- (pred_eta + log(1e6)) / log(2)
-
-    curve_df <- data.frame(
-        gene = rep(rownames(pred_lcpm), each = ncol(pred_lcpm)),
-        time = rep(one_result$time_grid, times = nrow(pred_lcpm)),
-        logCPM = as.vector(t(pred_lcpm)),
-        condition = unique(one_result$table$condition)[1],
-        stringsAsFactors = FALSE
+    .build_spline_curve_table(
+        fit = one_result$fit,
+        curve_genes = intersect(as.character(genes), available_genes),
+        curve_design = one_result$curve_design,
+        time_grid = one_result$time_grid,
+        label = unique(one_result$table$condition)[1],
+        tab = one_result$table
     )
-
-    sig_lookup <- stats::setNames(
-        one_result$table$significant,
-        one_result$table$gene
-    )
-    sig_flag <- sig_lookup[curve_df$gene]
-    sig_flag[is.na(sig_flag)] <- FALSE
-    curve_df$status <- ifelse(sig_flag, "Sig", "NotSig")
-    curve_df[
-        order(curve_df$gene, curve_df$condition, curve_df$time), ,
-        drop = FALSE
-    ]
 }
 
 
@@ -241,7 +217,7 @@
     curve_grid_length = 200,
     assay_name = NULL
 ) {
-    if (!methods::is(pb, "SingleCellExperiment")) {
+    if (!is(pb, "SingleCellExperiment")) {
         return(data.frame())
     }
 
@@ -249,31 +225,26 @@
         return(data.frame())
     }
 
-    assay_name <- .resolve_pseudobulk_curve_assay(pb, assay_name)
+    assay_name <- .scprokar_pick_assay(pb, assay_name, "counts")
 
     genes <- intersect(as.character(genes), rownames(pb))
     if (!length(genes)) {
         return(data.frame())
     }
 
-    meta <- as.data.frame(SummarizedExperiment::colData(pb))
+    meta <- as.data.frame(colData(pb))
     if (!all(c(time_col, condition_col) %in% colnames(meta))) {
         return(data.frame())
     }
 
     time_numeric <- .coerce_time_to_numeric(meta[[time_col]])
     condition_values <- as.character(meta[[condition_col]])
-    expr_mat <- as.matrix(
-        SummarizedExperiment::assay(pb, assay_name)[genes, , drop = FALSE]
-    )
+    expr_mat <- as.matrix(assay(pb, assay_name)[genes, , drop = FALSE])
 
-    out <- list()
-    out_i <- 0L
-
-    for (cond in sort(unique(condition_values))) {
+    out <- lapply(sort(unique(condition_values)), function(cond) {
         idx_cond <- which(condition_values == cond & is.finite(time_numeric))
         if (!length(idx_cond)) {
-            next
+            return(NULL)
         }
 
         cond_time <- time_numeric[idx_cond]
@@ -283,18 +254,17 @@
             length.out = curve_grid_length
         )
 
-        for (gene in genes) {
+        lapply(genes, function(gene) {
             pred <- .interpolate_gene_time_curve(
                 cond_time = cond_time,
                 expr_values = expr_mat[gene, idx_cond],
                 time_grid = time_grid
             )
             if (is.null(pred)) {
-                next
+                return(NULL)
             }
 
-            out_i <- out_i + 1L
-            out[[out_i]] <- data.frame(
+            data.frame(
                 gene = gene,
                 time = time_grid,
                 logCPM = pred,
@@ -302,10 +272,10 @@
                 status = "NotSig",
                 stringsAsFactors = FALSE
             )
-        }
-    }
+        })
+    })
 
-    .rbind_fill_data_frames(out)
+    .rbind_fill_data_frames(unlist(out, recursive = FALSE))
 }
 
 
@@ -392,22 +362,11 @@ run_edger_pairwise_de <- function(
     contrast_type <- match.arg(contrast_type)
     normalization <- match.arg(normalization)
 
-    .check_pb_assay(pb, assay_name)
-
-    meta <- as.data.frame(SummarizedExperiment::colData(pb))
-    needed_cols <- unique(c(group_col, combine_group_cols, covariates))
-    if (!all(needed_cols %in% colnames(meta))) {
-        stop(
-            "All grouping and covariate columns must exist in `colData(pb)`.",
-            call. = FALSE
-        )
-    }
-
     complete <- .filter_complete_de_samples(
         pb = pb,
-        meta = meta,
-        needed_cols = needed_cols,
-        assay_name = assay_name
+        assay_name = assay_name,
+        needed_cols = c(group_col, combine_group_cols, covariates),
+        "All grouping and covariate columns must exist in `colData(pb)`."
     )
     meta <- complete$meta
     counts <- complete$counts
@@ -750,7 +709,7 @@ plot_pairwise_de_ma <- function(
         curve_design = curve_model$curve_design,
         time_grid = curve_model$time_grid,
         label = label,
-        significant_genes = tab$gene[tab$significant]
+        tab = tab
     )
 
     list(
@@ -848,23 +807,12 @@ run_edger_spline_de <- function(
     normalization <- match.arg(normalization)
     return_curve_for <- match.arg(return_curve_for)
 
-    .check_pb_assay(pb, assay_name)
-
-    meta <- as.data.frame(SummarizedExperiment::colData(pb))
-    needed_cols <- unique(c(time_col, condition_col, covariates))
-    if (!all(needed_cols %in% colnames(meta))) {
-        stop(
-            "All requested time, condition, and covariate columns must exist ",
-            "in `colData(pb)`.",
-            call. = FALSE
-        )
-    }
-
     complete <- .filter_complete_de_samples(
         pb = pb,
-        meta = meta,
-        needed_cols = needed_cols,
-        assay_name = assay_name
+        assay_name = assay_name,
+        needed_cols = c(time_col, condition_col, covariates),
+        "All requested time, condition, and covariate columns must exist ",
+        "in `colData(pb)`."
     )
     keep <- complete$keep
     meta <- complete$meta
@@ -1187,10 +1135,10 @@ run_scproka_de <- function(
 #' @keywords internal
 #' @noRd
 .check_pb_assay <- function(pb, assay_name) {
-    if (!methods::is(pb, "SingleCellExperiment")) {
+    if (!is(pb, "SingleCellExperiment")) {
         stop("`pb` must be a SingleCellExperiment.", call. = FALSE)
     }
-    if (!assay_name %in% SummarizedExperiment::assayNames(pb)) {
+    if (!assay_name %in% assayNames(pb)) {
         stop("Assay `", assay_name, "` is not present in `pb`.", call. = FALSE)
     }
     invisible(TRUE)
@@ -1201,7 +1149,14 @@ run_scproka_de <- function(
 #'
 #' @keywords internal
 #' @noRd
-.filter_complete_de_samples <- function(pb, meta, needed_cols, assay_name) {
+.filter_complete_de_samples <- function(pb, assay_name, needed_cols, ...) {
+    .check_pb_assay(pb, assay_name)
+    meta <- as.data.frame(colData(pb))
+    needed_cols <- unique(needed_cols)
+    if (!all(needed_cols %in% colnames(meta))) {
+        stop(..., call. = FALSE)
+    }
+
     keep <- stats::complete.cases(meta[, needed_cols, drop = FALSE])
     if (!any(keep)) {
         stop(
@@ -1214,10 +1169,7 @@ run_scproka_de <- function(
     list(
         keep = keep,
         meta = meta[keep, , drop = FALSE],
-        counts = SummarizedExperiment::assay(pb, assay_name)[
-            , keep,
-            drop = FALSE
-        ]
+        counts = assay(pb, assay_name)[, keep, drop = FALSE]
     )
 }
 
@@ -1324,7 +1276,7 @@ run_scproka_de <- function(
     group = NULL
 ) {
     dge <- .prepare_edger_dge(
-        counts = counts,
+        counts = as.matrix(counts),
         meta = meta,
         normalization = normalization
     )
@@ -1396,10 +1348,7 @@ run_scproka_de <- function(
         ncol = nrow(pair_df),
         dimnames = list(colnames(design), contrast_names)
     )
-    test_list <- vector("list", nrow(pair_df))
-    table_list <- vector("list", nrow(pair_df))
-
-    for (i in seq_len(nrow(pair_df))) {
+    res <- lapply(seq_len(nrow(pair_df)), function(i) {
         g1 <- pair_df$group1[i]
         g2 <- pair_df$group2[i]
         contrast_vec <- .pairwise_contrast_vector(
@@ -1409,7 +1358,6 @@ run_scproka_de <- function(
             g1 = g1,
             g2 = g2
         )
-        contrast_matrix[, i] <- contrast_vec
 
         qlf <- edgeR::glmQLFTest(fit, contrast = contrast_vec)
         tab <- edgeR::topTags(qlf, n = Inf)$table
@@ -1418,18 +1366,17 @@ run_scproka_de <- function(
         tab$group1 <- g1
         tab$group2 <- g2
         tab$significant <- tab$FDR <= fdr_cutoff
-
-        test_list[[i]] <- qlf
-        table_list[[i]] <- tab
-    }
-
-    names(test_list) <- colnames(contrast_matrix)
-    names(table_list) <- colnames(contrast_matrix)
+        list(contrast_vec = contrast_vec, test = qlf, table = tab)
+    })
+    names(res) <- colnames(contrast_matrix)
+    contrast_matrix[] <- vapply(
+        res, `[[`, numeric(nrow(contrast_matrix)), "contrast_vec"
+    )
 
     list(
         contrast_matrix = contrast_matrix,
-        tests = test_list,
-        tables = table_list
+        tests = lapply(res, `[[`, "test"),
+        tables = lapply(res, `[[`, "table")
     )
 }
 
@@ -1486,22 +1433,17 @@ run_scproka_de <- function(
 #' @noRd
 .representative_covariate_frame <- function(meta, covariates, n_rows) {
     template <- meta[rep(1, n_rows), covariates, drop = FALSE]
-    for (cov_name in covariates) {
-        if (is.numeric(meta[[cov_name]]) || is.integer(meta[[cov_name]])) {
-            template[[cov_name]] <- mean(meta[[cov_name]], na.rm = TRUE)
+    Reduce(function(template, cov_name) {
+        x <- meta[[cov_name]]
+        template[[cov_name]] <- if (is.numeric(x) || is.integer(x)) {
+            mean(x, na.rm = TRUE)
+        } else if (is.factor(x)) {
+            factor(rep(.most_frequent_value(x), n_rows), levels = levels(x))
         } else {
-            mode_value <- .most_frequent_value(meta[[cov_name]])
-            if (is.factor(meta[[cov_name]])) {
-                template[[cov_name]] <- factor(
-                    rep(mode_value, n_rows),
-                    levels = levels(meta[[cov_name]])
-                )
-            } else {
-                template[[cov_name]] <- rep(mode_value, n_rows)
-            }
+            rep(.most_frequent_value(x), n_rows)
         }
-    }
-    template
+        template
+    }, as.vector(covariates), template)
 }
 
 
@@ -1556,7 +1498,7 @@ run_scproka_de <- function(
     curve_design,
     time_grid,
     label,
-    significant_genes
+    tab
 ) {
     if (!length(curve_genes)) {
         return(data.frame())
@@ -1573,11 +1515,9 @@ run_scproka_de <- function(
         condition = label,
         stringsAsFactors = FALSE
     )
-    curve_df$status <- ifelse(
-        curve_df$gene %in% significant_genes,
-        "Sig",
-        "NotSig"
-    )
+    sig_flag <- stats::setNames(tab$significant, tab$gene)[curve_df$gene]
+    sig_flag[is.na(sig_flag)] <- FALSE
+    curve_df$status <- ifelse(sig_flag, "Sig", "NotSig")
     curve_df[
         order(curve_df$gene, curve_df$condition, curve_df$time), ,
         drop = FALSE
@@ -1615,22 +1555,19 @@ run_scproka_de <- function(
 .fit_spline_de_by_condition <- function(counts, meta, condition_col, settings) {
     condition_values <- unique(as.character(meta[[condition_col]]))
     condition_values <- condition_values[order(condition_values)]
-    res_list <- vector("list", length(condition_values))
-    names(res_list) <- condition_values
-
-    for (i in seq_along(condition_values)) {
-        cond <- condition_values[i]
+    res_list <- lapply(condition_values, function(cond) {
         idx <- which(as.character(meta[[condition_col]]) == cond)
         if (length(idx) < max(settings$df + 1L, 4L)) {
-            next
+            return(NULL)
         }
-        res_list[[i]] <- .fit_spline_de_with_settings(
+        .fit_spline_de_with_settings(
             counts = counts[, idx, drop = FALSE],
             meta = meta[idx, , drop = FALSE],
             settings = settings,
             label = cond
         )
-    }
+    })
+    names(res_list) <- condition_values
 
     Filter(Negate(is.null), res_list)
 }
@@ -1646,30 +1583,16 @@ run_scproka_de <- function(
         return(res_list)
     }
 
-    for (i in seq_along(res_list)) {
-        res_list[[i]]$table[[condition_col]] <- res_list[[i]]$table$condition
-        if (nrow(res_list[[i]]$curve_data) > 0L) {
-            res_list[[i]]$curve_data[[condition_col]] <-
-                res_list[[i]]$curve_data$condition
+    res_list[] <- lapply(res_list, function(res) {
+        res$table[[condition_col]] <- res$table$condition
+        if (nrow(res$curve_data) > 0L) {
+            res$curve_data[[condition_col]] <- res$curve_data$condition
         }
-    }
+        res
+    })
     res_list
 }
 
-
-#' Pick the pseudobulk assay used for fallback expression curves
-#'
-#' @keywords internal
-#' @noRd
-.resolve_pseudobulk_curve_assay <- function(pb, assay_name) {
-    if (!is.null(assay_name)) {
-        return(assay_name)
-    }
-    if ("logcounts" %in% SummarizedExperiment::assayNames(pb)) {
-        return("logcounts")
-    }
-    "counts"
-}
 
 
 #' Interpolate one gene's mean expression onto a time grid

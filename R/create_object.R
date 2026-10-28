@@ -211,14 +211,12 @@ CreateBacObject <- function(
         list(column = time_col, value = time_value)
     )
 
-    for (item in assignments) {
-        if (is.null(item$column) || is.null(item$value)) {
-            next
+    Reduce(function(df, item) {
+        if (!is.null(item$column) && !is.null(item$value)) {
+            df[[item$column]] <- rep(item$value, length(ids))
         }
-        out[[item$column]] <- rep(item$value, length(ids))
-    }
-
-    out
+        df
+    }, assignments, out)
 }
 
 #' Merge multiple scProkaR or SingleCellExperiment objects
@@ -275,11 +273,7 @@ MergeBacObjects <- function(
     merged <- .scprokar_add_merged_logcounts(merged, dots, genes)
 
     merged_reduction <- .scprokar_merge_reduced_dims2(dots)
-    for (reduction_name in names(merged_reduction$kept)) {
-        reduction_matrix <- merged_reduction$kept[[reduction_name]]
-        SingleCellExperiment::reducedDim(merged, reduction_name) <-
-            reduction_matrix
-    }
+    reducedDims(merged) <- merged_reduction$kept
 
     meta_list <- lapply(dots, .scprokar_get_metadata)
     merged_meta <- meta_list[[1]]
@@ -331,12 +325,12 @@ MergeBacObjects <- function(
 
     sce <- SingleCellExperiment::SingleCellExperiment(
         assays = list(counts = .scprokar_as_dgC(counts)),
-        colData = S4Vectors::DataFrame(.scprokar_align_data_frame(
+        colData = DataFrame(.scprokar_align_data_frame(
             cell_metadata,
             colnames(counts),
             "cell_metadata"
         )),
-        rowData = S4Vectors::DataFrame(feature_metadata)
+        rowData = DataFrame(feature_metadata)
     )
 
     normalized <- tryCatch(
@@ -346,7 +340,7 @@ MergeBacObjects <- function(
     if (!is.null(normalized) &&
         nrow(normalized) == nrow(sce) &&
         ncol(normalized) == ncol(sce)) {
-        SummarizedExperiment::assay(sce, "logcounts") <- .scprokar_as_dgC(
+        assay(sce, "logcounts") <- .scprokar_as_dgC(
             normalized[rownames(sce), colnames(sce), drop = FALSE]
         )
     }
@@ -357,22 +351,20 @@ MergeBacObjects <- function(
             SeuratObject::Reductions(object = x),
             error = function(e) character(0)
         )
-        for (reduction_name in reduction_names) {
+        embs <- lapply(stats::setNames(nm = reduction_names), function(nm) {
             emb <- tryCatch(
-                SeuratObject::Embeddings(
-                    object = x,
-                    reduction = reduction_name
-                ),
+                SeuratObject::Embeddings(object = x, reduction = nm),
                 error = function(e) NULL
             )
-            if (!is.null(emb)) {
-                emb <- as.matrix(emb)
-                if (all(colnames(sce) %in% rownames(emb))) {
-                    emb <- emb[colnames(sce), , drop = FALSE]
-                    SingleCellExperiment::reducedDim(sce, reduction_name) <- emb
-                }
+            if (is.null(emb)) {
+                return(NULL)
             }
-        }
+            emb <- as.matrix(emb)
+            if (all(colnames(sce) %in% rownames(emb))) {
+                emb[colnames(sce), , drop = FALSE]
+            }
+        })
+        reducedDims(sce) <- Filter(Negate(is.null), embs)
     }
 
     list(
@@ -428,9 +420,8 @@ MergeBacObjects <- function(
         )
         if (!is.null(sce)) {
             sce <- .scprokar_ensure_cell_names(sce)
-            counts <- SummarizedExperiment::assay(sce, "counts")
-            SummarizedExperiment::assay(sce, "counts") <-
-                .scprokar_as_dgC(counts)
+            counts <- assay(sce, "counts")
+            assay(sce, "counts") <- .scprokar_as_dgC(counts)
             return(list(
                 sce = sce,
                 tenx = list(
@@ -468,8 +459,8 @@ MergeBacObjects <- function(
 
     sce <- SingleCellExperiment::SingleCellExperiment(
         assays = list(counts = .scprokar_as_dgC(counts)),
-        rowData = S4Vectors::DataFrame(feature_df),
-        colData = S4Vectors::DataFrame(row.names = barcodes)
+        rowData = DataFrame(feature_df),
+        colData = DataFrame(row.names = barcodes)
     )
 
     list(
@@ -488,7 +479,7 @@ MergeBacObjects <- function(
         return(sce)
     }
 
-    cd <- as.data.frame(SummarizedExperiment::colData(sce))
+    cd <- as.data.frame(colData(sce))
     barcode_col <- intersect(
         c("Barcode", "barcode", "cell", "cell_id"),
         colnames(cd)
@@ -502,19 +493,41 @@ MergeBacObjects <- function(
         }
     }
 
-    if (!is.null(rownames(cd)) &&
-        length(rownames(cd)) == ncol(sce) &&
-        all(nzchar(rownames(cd)))) {
-        colnames(sce) <- make.unique(rownames(cd))
-        return(sce)
-    }
-
-    stop(
+    colnames(sce) <- .scprokar_fallback_names(
+        rownames(cd), ncol(sce),
         "Could not determine cell barcodes from the imported 10x object. ",
         "Expected barcodes in `colnames(sce)` or in a colData column such as ",
-        "`Barcode`.",
-        call. = FALSE
+        "`Barcode`."
     )
+    sce
+}
+
+.scprokar_fallback_names <- function(ids, n, ...) {
+    if (is.null(ids) || length(ids) != n || !all(nzchar(ids))) {
+        stop(..., call. = FALSE)
+    }
+    make.unique(ids)
+}
+
+.scprokar_sync_assay_dimnames <- function(sce) {
+    Reduce(function(sce, assay_name) {
+        assay(sce, assay_name, withDimnames = FALSE) <- assay(sce, assay_name)
+        sce
+    }, assayNames(sce), sce)
+}
+
+.scprokar_first_name_col <- function(rd, n, cols = NULL) {
+    cols <- cols %||% c(
+        "Symbol", "symbol", "gene_name", "feature_name", "ID", "id", "gene_id"
+    )
+    hit <- Find(function(col) {
+        if (!col %in% colnames(rd)) {
+            return(FALSE)
+        }
+        v <- as.character(rd[[col]])
+        length(v) == n && any(nzchar(v))
+    }, as.vector(cols))
+    if (!is.null(hit)) as.character(rd[[hit]])
 }
 
 #' @keywords internal
@@ -524,107 +537,54 @@ MergeBacObjects <- function(
         return(sce)
     }
 
-    rd <- as.data.frame(SummarizedExperiment::rowData(sce))
-    candidate_cols <- intersect(
-        c(
-            "Symbol", "symbol", "gene_name", "feature_name",
-            "ID", "id", "gene_id"
-        ),
-        colnames(rd)
-    )
-
-    for (candidate_col in candidate_cols) {
-        candidate <- as.character(rd[[candidate_col]])
-        if (length(candidate) == nrow(sce) && any(nzchar(candidate))) {
-            rownames(sce) <- make.unique(ifelse(
-                is.na(candidate) | !nzchar(candidate),
-                paste0("feature_", seq_along(candidate)),
-                candidate
-            ))
-            assay_names <- SummarizedExperiment::assayNames(sce)
-            for (assay_name in assay_names) {
-                assay_mat <- SummarizedExperiment::assay(sce, assay_name)
-                rownames(assay_mat) <- rownames(sce)
-                SummarizedExperiment::assay(
-                    sce, assay_name,
-                    withDimnames = FALSE
-                ) <- assay_mat
-            }
-            return(sce)
-        }
+    rd <- as.data.frame(rowData(sce))
+    candidate <- .scprokar_first_name_col(rd, nrow(sce))
+    if (!is.null(candidate)) {
+        rownames(sce) <- make.unique(ifelse(
+            is.na(candidate) | !nzchar(candidate),
+            paste0("feature_", seq_along(candidate)),
+            candidate
+        ))
+        return(.scprokar_sync_assay_dimnames(sce))
     }
 
-    counts <- SummarizedExperiment::assay(sce, counts_assay)
-    if (!is.null(rownames(counts)) && all(nzchar(rownames(counts)))) {
-        rownames(sce) <- make.unique(rownames(counts))
-        return(sce)
-    }
-
-    stop(
+    rownames(sce) <- .scprokar_fallback_names(
+        rownames(assay(sce, counts_assay)), nrow(sce),
         "Could not determine feature names from the imported object. ",
         "Expected names in `rownames(sce)` or in rowData columns such as ",
-        "`Symbol` or `ID`.",
-        call. = FALSE
+        "`Symbol` or `ID`."
     )
+    sce
 }
 
 #' @keywords internal
 .scprokar_promote_feature_names <- function(sce, feature_name_col = NULL) {
-    rd <- as.data.frame(SummarizedExperiment::rowData(sce))
-    candidate_cols <- if (!is.null(feature_name_col)) {
-        feature_name_col
-    } else {
-        intersect(
-            c(
-                "Symbol", "symbol", "gene_name", "feature_name",
-                "ID", "id", "gene_id"
-            ),
-            colnames(rd)
-        )
+    rd <- as.data.frame(rowData(sce))
+    candidate <- .scprokar_first_name_col(rd, nrow(sce), feature_name_col)
+    if (is.null(candidate)) {
+        return(sce)
     }
+    replacement <- ifelse(
+        is.na(candidate) | !nzchar(candidate),
+        if (!is.null(rownames(sce)) &&
+            length(rownames(sce)) == nrow(sce)) rownames(sce) else
+            paste0("feature_", seq_len(nrow(sce))),
+        candidate
+    )
+    replacement <- make.unique(replacement)
 
-    for (candidate_col in candidate_cols) {
-        if (!candidate_col %in% colnames(rd)) {
-            next
-        }
-        candidate <- as.character(rd[[candidate_col]])
-        if (length(candidate) != nrow(sce) || !any(nzchar(candidate))) {
-            next
-        }
-        replacement <- ifelse(
-            is.na(candidate) | !nzchar(candidate),
-            if (!is.null(rownames(sce)) &&
-                length(rownames(sce)) == nrow(sce)) rownames(sce) else
-                paste0("feature_", seq_len(nrow(sce))),
-            candidate
-        )
-        replacement <- make.unique(replacement)
-
-        current_names <- rownames(sce)
-        if (!is.null(current_names) && identical(current_names, replacement)) {
-            return(sce)
-        }
-
-        if (!"feature_id" %in% colnames(rd) && !is.null(current_names)) {
-            rd$feature_id <- current_names
-        }
-        rownames(rd) <- replacement
-        SummarizedExperiment::rowData(sce) <- S4Vectors::DataFrame(rd)
-        rownames(sce) <- replacement
-
-        assay_names <- SummarizedExperiment::assayNames(sce)
-        for (assay_name in assay_names) {
-            assay_mat <- SummarizedExperiment::assay(sce, assay_name)
-            rownames(assay_mat) <- replacement
-            SummarizedExperiment::assay(
-                sce, assay_name,
-                withDimnames = FALSE
-            ) <- assay_mat
-        }
+    current_names <- rownames(sce)
+    if (!is.null(current_names) && identical(current_names, replacement)) {
         return(sce)
     }
 
-    sce
+    if (!"feature_id" %in% colnames(rd) && !is.null(current_names)) {
+        rd$feature_id <- current_names
+    }
+    rownames(rd) <- replacement
+    rowData(sce) <- DataFrame(rd)
+    rownames(sce) <- replacement
+    .scprokar_sync_assay_dimnames(sce)
 }
 
 #' @keywords internal
@@ -633,7 +593,7 @@ MergeBacObjects <- function(
     counts_assay = "counts",
     feature_name_col = NULL
 ) {
-    if (!counts_assay %in% SummarizedExperiment::assayNames(sce)) {
+    if (!counts_assay %in% assayNames(sce)) {
         stop("Assay '", counts_assay, "' was not found in `x`.", call. = FALSE)
     }
 
@@ -643,25 +603,7 @@ MergeBacObjects <- function(
         feature_name_col = feature_name_col
     )
     sce <- .scprokar_ensure_feature_names(sce, counts_assay = counts_assay)
-
-    assay_names <- SummarizedExperiment::assayNames(sce)
-    for (assay_name in assay_names) {
-        assay_mat <- SummarizedExperiment::assay(sce, assay_name)
-        if (is.null(colnames(assay_mat)) ||
-            !identical(colnames(assay_mat), colnames(sce))) {
-            colnames(assay_mat) <- colnames(sce)
-        }
-        if (is.null(rownames(assay_mat)) ||
-            !identical(rownames(assay_mat), rownames(sce))) {
-            rownames(assay_mat) <- rownames(sce)
-        }
-        SummarizedExperiment::assay(
-            sce, assay_name,
-            withDimnames = FALSE
-        ) <- assay_mat
-    }
-
-    sce
+    .scprokar_sync_assay_dimnames(sce)
 }
 
 #' @keywords internal
@@ -675,22 +617,16 @@ MergeBacObjects <- function(
     )
     candidates <- unique(candidates[dir.exists(candidates)])
 
-    for (candidate in candidates) {
-        has_matrix <- any(file.exists(file.path(
-            candidate,
-            c("matrix.mtx", "matrix.mtx.gz")
-        )))
-        has_barcodes <- any(file.exists(file.path(
-            candidate,
-            c("barcodes.tsv", "barcodes.tsv.gz")
-        )))
-        has_features <- any(file.exists(file.path(
-            candidate,
-            c("features.tsv", "features.tsv.gz", "genes.tsv", "genes.tsv.gz")
-        )))
-        if (has_matrix && has_barcodes && has_features) {
-            return(candidate)
-        }
+    hit <- Find(function(candidate) {
+        has <- function(files) any(file.exists(file.path(candidate, files)))
+        has(c("matrix.mtx", "matrix.mtx.gz")) &&
+            has(c("barcodes.tsv", "barcodes.tsv.gz")) &&
+            has(c(
+                "features.tsv", "features.tsv.gz", "genes.tsv", "genes.tsv.gz"
+            ))
+    }, candidates)
+    if (!is.null(hit)) {
+        return(hit)
     }
 
     stop(
@@ -707,10 +643,7 @@ MergeBacObjects <- function(
         matrix_dir,
         c("matrix.mtx", "matrix.mtx.gz")
     )
-    con <- if (grepl("\\.gz$", matrix_file))
-        gzfile(matrix_file, open = "rt") else file(matrix_file, open = "rt")
-    on.exit(close(con), add = TRUE)
-    Matrix::readMM(con)
+    Matrix::readMM(matrix_file)
 }
 
 #' @keywords internal
@@ -727,10 +660,7 @@ MergeBacObjects <- function(
         )
     )
     table_file <- .scprokar_first_existing_file(matrix_dir, choices)
-    con <- if (grepl("\\.gz$", table_file))
-        gzfile(table_file, open = "rt") else file(table_file, open = "rt")
-    on.exit(close(con), add = TRUE)
-    utils::read.delim(con, header = FALSE, stringsAsFactors = FALSE)
+    utils::read.delim(table_file, header = FALSE, stringsAsFactors = FALSE)
 }
 
 #' @keywords internal
@@ -772,50 +702,39 @@ MergeBacObjects <- function(
         use.names = FALSE
     ))
     out <- data.frame(row.names = genes)
-    for (col in all_columns) {
-        values <- rep(NA, length(genes))
-        for (df in rowdata_list) {
+    out[all_columns] <- lapply(all_columns, function(col) {
+        Reduce(function(values, df) {
             if (!col %in% colnames(df)) {
-                next
+                return(values)
             }
             idx <- match(rownames(df), genes)
             fill <- !is.na(idx) & is.na(values[idx])
             if (any(fill)) {
                 values[idx[fill]] <- df[[col]][fill]
             }
-        }
-        out[[col]] <- values
-    }
+            values
+        }, rowdata_list, rep(NA, length(genes)))
+    })
     out
 }
 
 #' @keywords internal
 .scprokar_merge_reduced_dims2 <- function(objects) {
-    reduction_names <- lapply(objects, SingleCellExperiment::reducedDimNames)
+    reduction_names <- lapply(objects, reducedDimNames)
     common_names <- Reduce(intersect, reduction_names)
-    if (length(common_names) == 0L) {
-        return(list(
-            kept = list(),
-            skipped = list(),
-            n_objects = length(objects)
-        ))
-    }
-
-    kept <- list()
-    skipped <- list()
     cell_ids <- unlist(lapply(objects, colnames), use.names = FALSE)
 
-    for (reduction_name in common_names) {
+    Reduce(function(out, reduction_name) {
         reductions <- lapply(objects, function(sce) {
-            SingleCellExperiment::reducedDim(sce, reduction_name)
+            reducedDim(sce, reduction_name)
         })
         ndim <- vapply(reductions, ncol, integer(1))
         if (length(unique(ndim)) != 1L) {
-            skipped[[reduction_name]] <- sprintf(
+            out$skipped[[reduction_name]] <- sprintf(
                 "dimension mismatch (ncol: %s)",
                 paste(ndim, collapse = ",")
             )
-            next
+            return(out)
         }
 
         aligned <- lapply(seq_along(objects), function(i) {
@@ -850,17 +769,18 @@ MergeBacObjects <- function(
             aligned_reduction
         })
         if (any(vapply(aligned, is.null, logical(1)))) {
-            skipped[[reduction_name]] <-
+            out$skipped[[reduction_name]] <-
                 "unable to align reduced dimensions by cell IDs"
-            next
+            return(out)
         }
 
         merged_matrix <- do.call(rbind, aligned)
         rownames(merged_matrix) <- cell_ids
-        kept[[reduction_name]] <- merged_matrix
-    }
-
-    list(kept = kept, skipped = skipped, n_objects = length(objects))
+        out$kept[[reduction_name]] <- merged_matrix
+        out
+    }, common_names, list(
+        kept = list(), skipped = list(), n_objects = length(objects)
+    ))
 }
 
 #' @keywords internal
@@ -875,16 +795,15 @@ MergeBacObjects <- function(
         new_ids <- .scprokar_merge_cell_ids(sce, object_index = i)
 
         colnames(sce) <- new_ids
-        cd <- as.data.frame(SummarizedExperiment::colData(sce))
+        cd <- as.data.frame(colData(sce))
         cd$original_cell_id <- rownames(cd)
         rownames(cd) <- new_ids
-        SummarizedExperiment::colData(sce) <- S4Vectors::DataFrame(cd)
+        colData(sce) <- DataFrame(cd)
 
-        for (reduction_name in SingleCellExperiment::reducedDimNames(sce)) {
-            emb <- SingleCellExperiment::reducedDim(sce, reduction_name)
-            rownames(emb) <- new_ids
-            SingleCellExperiment::reducedDim(sce, reduction_name) <- emb
-        }
+        sce <- Reduce(function(sce, nm) {
+            reducedDim(sce, nm) <- reducedDim(sce, nm)
+            sce
+        }, reducedDimNames(sce), sce)
 
         meta <- .scprokar_get_metadata(sce)
         meta$merge <- c(meta$merge, list(renamed_for_merge = TRUE))
@@ -896,22 +815,15 @@ MergeBacObjects <- function(
 .scprokar_merge_cell_ids <- function(sce, object_index) {
     meta <- .scprokar_get_metadata(sce)
     cols <- meta$columns
-    cd <- as.data.frame(SummarizedExperiment::colData(sce))
+    cd <- as.data.frame(colData(sce))
 
-    prefix <- NULL
-    for (candidate in c(
-        cols$sample_col, cols$batch_col, "sample_id", "batch"
-    )) {
-        if (is.null(candidate) || !candidate %in% colnames(cd)) {
-            next
+    hit <- Find(function(col) {
+        if (is.null(col) || !col %in% colnames(cd)) {
+            return(FALSE)
         }
-        values <- unique(as.character(cd[[candidate]]))
-        values <- values[!is.na(values)]
-        if (length(values) == 1) {
-            prefix <- values[[1]]
-            break
-        }
-    }
+        length(setdiff(as.character(cd[[col]]), NA)) == 1
+    }, c(cols$sample_col, cols$batch_col, "sample_id", "batch"))
+    prefix <- if (!is.null(hit)) setdiff(as.character(cd[[hit]]), NA)
 
     if (is.null(prefix) || !nzchar(prefix)) {
         prefix <- paste0("sample", object_index)
@@ -939,22 +851,22 @@ MergeBacObjects <- function(
     seurat_info <- NULL
     tenx_info <- NULL
 
-    if (methods::is(x, "SingleCellExperiment")) {
+    if (is(x, "SingleCellExperiment")) {
         sce <- .scprokar_prepare_sce_input(
             x,
             counts_assay = counts_assay,
             feature_name_col = feature_name_col
         )
-        if (!counts_assay %in% SummarizedExperiment::assayNames(sce)) {
+        if (!counts_assay %in% assayNames(sce)) {
             stop(
                 "Assay '", counts_assay, "' was not found in `x`.",
                 call. = FALSE
             )
         }
-        counts <- SummarizedExperiment::assay(sce, counts_assay)
+        counts <- assay(sce, counts_assay)
         .scprokar_stopifnot_counts(counts)
-        SummarizedExperiment::assay(sce, "counts") <- .scprokar_as_dgC(counts)
-    } else if (methods::is(x, "Seurat")) {
+        assay(sce, "counts") <- .scprokar_as_dgC(counts)
+    } else if (is(x, "Seurat")) {
         seurat_payload <- .scprokar_from_seurat(
             x,
             seurat_assay = seurat_assay,
@@ -1007,7 +919,7 @@ MergeBacObjects <- function(
 
     merged_coldata <- .scprokar_align_data_frame(
         if (!is.null(cell_metadata)) cell_metadata else
-            as.data.frame(SummarizedExperiment::colData(sce)),
+            as.data.frame(colData(sce)),
         ids = cells,
         what = "cell_metadata"
     )
@@ -1025,13 +937,13 @@ MergeBacObjects <- function(
     )
     merged_rowdata <- .scprokar_align_data_frame(
         if (!is.null(feature_metadata)) feature_metadata else
-            as.data.frame(SummarizedExperiment::rowData(sce)),
+            as.data.frame(rowData(sce)),
         ids = genes,
         what = "feature_metadata"
     )
 
-    SummarizedExperiment::colData(sce) <- S4Vectors::DataFrame(merged_coldata)
-    SummarizedExperiment::rowData(sce) <- S4Vectors::DataFrame(merged_rowdata)
+    colData(sce) <- DataFrame(merged_coldata)
+    rowData(sce) <- DataFrame(merged_rowdata)
 
     .scprokar_match_columns(
         sce,
@@ -1094,7 +1006,7 @@ MergeBacObjects <- function(
             call. = FALSE
         )
     }
-    if (!all(vapply(dots, methods::is, logical(1), "SingleCellExperiment"))) {
+    if (!all(vapply(dots, is, logical(1), "SingleCellExperiment"))) {
         stop(
         "All inputs to MergeBacObjects() must be SingleCellExperiment objects.",
         call. = FALSE
@@ -1131,14 +1043,14 @@ MergeBacObjects <- function(
 #' @noRd
 .scprokar_assemble_merged_sce <- function(objects, genes) {
     counts_list <- lapply(objects, function(sce) {
-        counts <- SummarizedExperiment::assay(sce, "counts")
+        counts <- assay(sce, "counts")
         .scprokar_expand_counts(counts, genes)
     })
     merged_counts <- Reduce(Matrix::cbind2, counts_list)
     merged_counts <- .scprokar_as_dgC(merged_counts)
 
     coldata_list <- lapply(objects, function(sce) {
-        as.data.frame(SummarizedExperiment::colData(sce))
+        as.data.frame(colData(sce))
     })
     merged_coldata <- do.call(rbind, coldata_list)
     rownames(merged_coldata) <- unlist(
@@ -1147,7 +1059,7 @@ MergeBacObjects <- function(
     )
 
     rowdata_list <- lapply(objects, function(sce) {
-        df <- as.data.frame(SummarizedExperiment::rowData(sce))
+        df <- as.data.frame(rowData(sce))
         df <- df[match(rownames(sce), rownames(df)), , drop = FALSE]
         rownames(df) <- rownames(sce)
         df
@@ -1156,8 +1068,8 @@ MergeBacObjects <- function(
 
     SingleCellExperiment::SingleCellExperiment(
         assays = list(counts = merged_counts),
-        colData = S4Vectors::DataFrame(merged_coldata),
-        rowData = S4Vectors::DataFrame(merged_rowdata)
+        colData = DataFrame(merged_coldata),
+        rowData = DataFrame(merged_rowdata)
     )
 }
 
@@ -1168,8 +1080,7 @@ MergeBacObjects <- function(
 .scprokar_add_merged_logcounts <- function(merged, objects, genes) {
     has_logcounts <- all(vapply(
         objects,
-        function(sce) "logcounts" %in%
-            SummarizedExperiment::assayNames(sce),
+        function(sce) "logcounts" %in% assayNames(sce),
         logical(1)
     ))
     if (!has_logcounts) {
@@ -1177,10 +1088,10 @@ MergeBacObjects <- function(
     }
 
     logcounts_list <- lapply(objects, function(sce) {
-        logcounts <- SummarizedExperiment::assay(sce, "logcounts")
+        logcounts <- assay(sce, "logcounts")
         .scprokar_expand_counts(logcounts, genes)
     })
-    SummarizedExperiment::assay(merged, "logcounts") <- .scprokar_as_dgC(
+    assay(merged, "logcounts") <- .scprokar_as_dgC(
         Reduce(Matrix::cbind2, logcounts_list)
     )
     merged

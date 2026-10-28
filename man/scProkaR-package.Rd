@@ -28,11 +28,11 @@ Useful links:
 
 }
 \author{
-\strong{Maintainer}: Ning Liu \email{ning.liu@adelaide.edu.au}
+\strong{Maintainer}: Jinxin Zhao \email{jinxin.zhao@monash.edu} (\href{https://orcid.org/0000-0002-0604-3541}{ORCID})
 
 Authors:
 \itemize{
-  \item Jinxin Zhao
+  \item Ning Liu \email{ning.liu@adelaide.edu.au}
 }
 
 }

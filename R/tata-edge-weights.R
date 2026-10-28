@@ -26,7 +26,7 @@ compute_topology_weights <- function(
     eps = 1e-8
 ) {
     if (!inherits(adjacency, "sparseMatrix")) {
-        adjacency <- methods::as(adjacency, "dgCMatrix")
+        adjacency <- as(adjacency, "dgCMatrix")
     }
 
     clusters <- factor(clusters)
@@ -50,9 +50,7 @@ compute_topology_weights <- function(
     total_degree <- sum(degree_per_cell)
 
     pair_grid <- utils::combn(cluster_levels, 2)
-    edge_rows <- vector("list", ncol(pair_grid))
-
-    for (idx in seq_len(ncol(pair_grid))) {
+    do.call(rbind, lapply(seq_len(ncol(pair_grid)), function(idx) {
         cluster_a <- pair_grid[1, idx]
         cluster_b <- pair_grid[2, idx]
         observed_edges <- as.numeric(cluster_adjacency[cluster_a, cluster_b])
@@ -63,7 +61,7 @@ compute_topology_weights <- function(
             0
         }
 
-        edge_rows[[idx]] <- data.frame(
+        data.frame(
             cluster_a = cluster_a,
             cluster_b = cluster_b,
             observed_edges = observed_edges,
@@ -75,9 +73,7 @@ compute_topology_weights <- function(
             topology_weight = observed_edges / (expected_edges + eps),
             stringsAsFactors = FALSE
         )
-    }
-
-    do.call(rbind, edge_rows)
+    }))
 }
 
 
@@ -114,7 +110,7 @@ compute_time_weights <- function(
     timepoint
 ) {
     if (!inherits(adjacency, "sparseMatrix")) {
-        adjacency <- methods::as(adjacency, "dgCMatrix")
+        adjacency <- as(adjacency, "dgCMatrix")
     }
 
     clusters <- factor(clusters)
@@ -135,12 +131,9 @@ compute_time_weights <- function(
         pair_key = pair_key
     )
 
-    edge_rows <- vector("list", ncol(pair_grid))
-    for (idx in seq_len(ncol(pair_grid))) {
+    do.call(rbind, lapply(seq_len(ncol(pair_grid)), function(idx) {
         cluster_a <- pair_grid[1, idx]
         cluster_b <- pair_grid[2, idx]
-        pair_name <- paste(cluster_a, cluster_b, sep = "||")
-        pair_delta <- flow_store[[pair_name]]
         cluster_gap <- as.numeric(
             cluster_median_time[[cluster_b]] -
                 cluster_median_time[[cluster_a]]
@@ -151,13 +144,13 @@ compute_time_weights <- function(
         )
 
         pair_stats <- .tata_pair_time_stats(
-            pair_delta = pair_delta,
+            pair_delta = flow_store[[pair_key[idx]]],
             cluster_gap = cluster_gap,
             time_overlap = time_overlap,
             typical_step = typical_step
         )
 
-        edge_rows[[idx]] <- data.frame(
+        data.frame(
             cluster_a = cluster_a,
             cluster_b = cluster_b,
             n_time_edges = pair_stats$n_time_edges,
@@ -171,9 +164,7 @@ compute_time_weights <- function(
             time_consistency = pair_stats$time_consistency,
             stringsAsFactors = FALSE
         )
-    }
-
-    do.call(rbind, edge_rows)
+    }))
 }
 
 
@@ -360,31 +351,19 @@ build_tata_graph <- function(
         return(flow_store)
     }
 
-    for (row_idx in seq_len(nrow(edge_summary))) {
-        i <- edge_summary$i[row_idx]
-        j <- edge_summary$j[row_idx]
-        cluster_i <- cluster_id[i]
-        cluster_j <- cluster_id[j]
-
-        ordered_pair <- sort(c(cluster_i, cluster_j))
-        cluster_a <- cluster_levels[ordered_pair[1]]
-        cluster_b <- cluster_levels[ordered_pair[2]]
-        pair_name <- paste(cluster_a, cluster_b, sep = "||")
-
-        if (cluster_i == ordered_pair[1]) {
-            time_a <- time_numeric[i]
-            time_b <- time_numeric[j]
-        } else {
-            time_a <- time_numeric[j]
-            time_b <- time_numeric[i]
-        }
-
-        flow_store[[pair_name]] <- c(
-            flow_store[[pair_name]],
-            time_b - time_a
-        )
+    swap <- cluster_id[edge_summary$i] > cluster_id[edge_summary$j]
+    if (anyNA(swap)) {
+        stop("missing value where TRUE/FALSE needed", call. = FALSE)
     }
-
+    from <- ifelse(swap, edge_summary$j, edge_summary$i)
+    to <- ifelse(swap, edge_summary$i, edge_summary$j)
+    pair_name <- paste(
+        cluster_levels[cluster_id[from]],
+        cluster_levels[cluster_id[to]],
+        sep = "||"
+    )
+    deltas <- split(time_numeric[to] - time_numeric[from], pair_name)
+    flow_store[names(deltas)] <- deltas
     flow_store
 }
 
@@ -570,13 +549,11 @@ build_tata_graph <- function(
         ))
     }
 
-    expanded_edges <- vector("list", nrow(kept_edges))
-
-    for (idx in seq_len(nrow(kept_edges))) {
+    do.call(rbind, lapply(seq_len(nrow(kept_edges)), function(idx) {
         edge_row <- kept_edges[idx, , drop = FALSE]
 
         if (edge_row$direction == "ambiguous") {
-            expanded_edges[[idx]] <- data.frame(
+            data.frame(
                 from = c(edge_row$cluster_a, edge_row$cluster_b),
                 to = c(edge_row$cluster_b, edge_row$cluster_a),
                 weight = rep(edge_row$tata_weight, 2),
@@ -592,7 +569,7 @@ build_tata_graph <- function(
                 stringsAsFactors = FALSE
             )
         } else {
-            expanded_edges[[idx]] <- data.frame(
+            data.frame(
                 from = edge_row$from,
                 to = edge_row$to,
                 weight = edge_row$tata_weight,
@@ -608,7 +585,5 @@ build_tata_graph <- function(
                 stringsAsFactors = FALSE
             )
         }
-    }
-
-    do.call(rbind, expanded_edges)
+    }))
 }

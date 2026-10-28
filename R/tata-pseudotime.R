@@ -50,7 +50,7 @@ compute_tata_pseudotime <- function(
         stop("`cluster_graph` must be an igraph object.", call. = FALSE)
     }
 
-    meta <- as.data.frame(SummarizedExperiment::colData(sce))
+    meta <- as.data.frame(colData(sce))
     .tata_check_pseudotime_columns(meta, cluster_col, time_col)
 
     inputs <- .tata_pseudotime_inputs(
@@ -475,37 +475,30 @@ compute_tata_pseudotime <- function(
     )
     cluster_pseudotime[root_cluster] <- 0
 
-    for (cluster_name in cluster_order[-1]) {
+    Reduce(function(cluster_pseudotime, cluster_name) {
         incoming <- forward_edge_df[
             forward_edge_df$to == cluster_name, ,
             drop = FALSE
         ]
-        if (nrow(incoming) == 0L) {
-            next
-        }
-
         pred_pt <- cluster_pseudotime[incoming$from]
         valid <- is.finite(pred_pt)
         if (!any(valid)) {
-            next
+            return(cluster_pseudotime)
         }
 
-        incoming <- incoming[valid, , drop = FALSE]
         pred_pt <- pred_pt[valid]
         edge_increment <- .tata_edge_increment(
-            incoming,
+            incoming[valid, , drop = FALSE],
             typical_step,
             max_weight,
             eps
         )
-
         cluster_pseudotime[cluster_name] <- max(
             pred_pt + edge_increment,
             na.rm = TRUE
         )
-    }
-
-    cluster_pseudotime
+        cluster_pseudotime
+    }, cluster_order[-1], cluster_pseudotime)
 }
 
 
@@ -679,24 +672,17 @@ compute_tata_pseudotime <- function(
     local_step,
     cell_names
 ) {
-    cell_pseudotime <- rep(NA_real_, length(clusters))
-    names(cell_pseudotime) <- cell_names
-
-    for (cluster_name in levels(clusters)) {
-        idx <- which(as.character(clusters) == cluster_name)
-        base_pt <- cluster_pseudotime[cluster_name]
-        if (length(idx) == 0L || is.na(base_pt)) {
-            next
+    base_pt <- cluster_pseudotime[as.character(clusters)]
+    cell_pseudotime <- base_pt + stats::ave(
+        time_numeric,
+        replace(clusters, is.na(base_pt), NA),
+        FUN = function(x) {
+            x[] <- within_cluster_fraction * local_step *
+                .tata_within_cluster_rank(x, has_time)
+            x
         }
-
-        within_rank <- .tata_within_cluster_rank(
-            time_numeric[idx],
-            has_time
-        )
-        cell_pseudotime[idx] <- base_pt +
-            within_cluster_fraction * local_step * within_rank
-    }
-
+    )
+    names(cell_pseudotime) <- cell_names
     cell_pseudotime
 }
 

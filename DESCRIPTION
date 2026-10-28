@@ -1,7 +1,7 @@
 Package: scProkaR
 Type: Package
 Title: Microbial Single-Cell RNA-Seq Analysis for Bacterial Systems
-Version: 0.99.2
+Version: 0.99.3
 Authors@R:
     c(
         person("Jinxin", "Zhao", email = "jinxin.zhao@monash.edu",
@@ -23,7 +23,7 @@ License: MIT + file LICENSE
 Encoding: UTF-8
 Language: en-GB
 Depends:
-    R (>= 4.5.0)
+    R (>= 4.6.0)
 Imports:
     bluster,
     edgeR,

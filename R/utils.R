@@ -80,9 +80,9 @@ NULL
         x <- x * 1
     }
     if (inherits(x, "Matrix")) {
-        x <- methods::as(x, "CsparseMatrix")
+        x <- as(x, "CsparseMatrix")
     }
-    methods::as(x, "dgCMatrix")
+    as(x, "dgCMatrix")
 }
 
 #' @keywords internal
@@ -110,7 +110,7 @@ NULL
 
 #' @keywords internal
 .scprokar_get_metadata <- function(sce) {
-    meta <- S4Vectors::metadata(sce)$scProkaR
+    meta <- metadata(sce)$scProkaR
     if (is.null(meta)) {
         meta <- list()
     }
@@ -119,15 +119,15 @@ NULL
 
 #' @keywords internal
 .scprokar_set_metadata <- function(sce, meta) {
-    all_meta <- S4Vectors::metadata(sce)
+    all_meta <- metadata(sce)
     all_meta$scProkaR <- meta
-    S4Vectors::metadata(sce) <- all_meta
+    metadata(sce) <- all_meta
     sce
 }
 
 #' @keywords internal
 .scprokar_resolve_reduction_name <- function(sce, reduction) {
-    available <- SingleCellExperiment::reducedDimNames(sce)
+    available <- reducedDimNames(sce)
     if (!length(available)) {
         stop("No reduced dimensions are available in `sce`.", call. = FALSE)
     }
@@ -160,7 +160,7 @@ NULL
 
 #' @keywords internal
 .scprokar_match_columns <- function(sce, columns, label) {
-    present <- colnames(SummarizedExperiment::colData(sce))
+    present <- colnames(colData(sce))
     missing_columns <- setdiff(stats::na.omit(columns), present)
     if (length(missing_columns) > 0) {
         stop(
@@ -178,14 +178,13 @@ NULL
     assay_name = "counts",
     scale_factor = 1e4
 ) {
-    counts <- SummarizedExperiment::assay(sce, assay_name)
+    counts <- assay(sce, assay_name)
     libsize <- Matrix::colSums(counts)
     scaling <- scale_factor / pmax(libsize, 1)
     norm <- counts %*% Matrix::Diagonal(x = scaling)
     lognorm <- .scprokar_as_dgC(log1p(norm))
     dimnames(lognorm) <- dimnames(counts)
-    SummarizedExperiment::assay(sce, "logcounts", withDimnames = FALSE) <-
-        lognorm
+    assay(sce, "logcounts", withDimnames = FALSE) <- lognorm
     sce
 }
 
@@ -200,18 +199,18 @@ NULL
         return(rownames(sce))
     }
 
-    current <- SummarizedExperiment::rowData(sce)
+    current <- rowData(sce)
     if ("is_hvg" %in% colnames(current) && any(current$is_hvg, na.rm = TRUE)) {
         return(rownames(sce)[which(current$is_hvg)])
     }
 
-    if ("logcounts" %in% SummarizedExperiment::assayNames(sce) &&
+    if ("logcounts" %in% assayNames(sce) &&
         requireNamespace("scrapper", quietly = TRUE)) {
-        logx <- SummarizedExperiment::assay(sce, "logcounts")
+        logx <- assay(sce, "logcounts")
         var_fit <- scrapper::modelGeneVariances(logx)
         ord <- order(var_fit$statistics$residuals, decreasing = TRUE)
     } else {
-        logx <- SummarizedExperiment::assay(sce, "logcounts")
+        logx <- assay(sce, "logcounts")
         n_cells <- ncol(logx)
         center <- Matrix::rowMeans(logx)
         mean_sq <- Matrix::rowSums(logx^2) / max(n_cells, 1)
@@ -220,12 +219,12 @@ NULL
     }
 
     keep <- ord[seq_len(min(length(ord), nfeatures))]
-    row_data <- SummarizedExperiment::rowData(sce)
+    row_data <- rowData(sce)
     row_data$is_hvg <- FALSE
     row_data$is_hvg[keep] <- TRUE
     row_data$hvg_rank <- NA_integer_
     row_data$hvg_rank[ord] <- seq_along(ord)
-    SummarizedExperiment::rowData(sce) <- row_data
+    rowData(sce) <- row_data
     rownames(sce)[keep]
 }
 
@@ -237,9 +236,7 @@ NULL
     ncomponents = 30,
     reduction_name = "PCA"
 ) {
-    mat <- SummarizedExperiment::assay(
-        sce, assay_name
-    )[features, , drop = FALSE]
+    mat <- assay(sce, assay_name)[features, , drop = FALSE]
     x_sparse <- Matrix::t(.scprokar_as_dgC(mat))
     rank_k <- min(ncomponents, max(1, ncol(x_sparse) - 1))
     full_rank <- min(nrow(x_sparse), ncol(x_sparse))
@@ -284,7 +281,7 @@ NULL
 
     emb <- pcs$x
     rownames(emb) <- colnames(sce)
-    SingleCellExperiment::reducedDim(sce, reduction_name) <- emb
+    reducedDim(sce, reduction_name) <- emb
     sce
 }
 
@@ -297,13 +294,11 @@ NULL
     reduction_name = "PCA"
 ) {
     feature_set <- match.arg(feature_set)
-    if (!"logcounts" %in% SummarizedExperiment::assayNames(sce)) {
+    if (!"logcounts" %in% assayNames(sce)) {
         sce <- .scprokar_normalize_logcounts(sce, assay_name = assay_name)
     }
-    if (!reduction_name %in% SingleCellExperiment::reducedDimNames(sce) ||
-        max(dims) > ncol(
-            SingleCellExperiment::reducedDim(sce, reduction_name)
-        )) {
+    if (!reduction_name %in% reducedDimNames(sce) ||
+        max(dims) > ncol(reducedDim(sce, reduction_name))) {
         features <- .scprokar_select_features(sce, feature_set = feature_set)
         sce <- .scprokar_run_pca(
             sce,
@@ -384,40 +379,32 @@ NULL
     adj <- Matrix::sparseMatrix(i = i, j = j, x = 1, dims = c(nrow(x), nrow(x)))
     adj <- (adj + Matrix::t(adj)) > 0
     adj <- adj * 1
-    methods::as(adj, "dgCMatrix")
+    as(adj, "dgCMatrix")
 }
 
 #' @keywords internal
 .scprokar_reduction_lookup <- function(sce, methods = NULL) {
-    meta <- .scprokar_get_metadata(sce)
-    integrations <- meta$integration$results
-    mapping <- list()
-    available <- SingleCellExperiment::reducedDimNames(sce)
-
-    if (!is.null(integrations)) {
-        for (nm in names(integrations)) {
-            mapping[[nm]] <- integrations[[nm]]$reduction
-        }
-    }
+    integrations <- .scprokar_get_metadata(sce)$integration$results
+    available <- reducedDimNames(sce)
+    registered <- Filter(Negate(is.null), Map(
+        function(nm) integrations[[nm]]$reduction, unique(names(integrations))
+    ))
 
     ## Aliases inferred from an `integrated_*` name that was never registered.
     ## They are a convenience, so they rank BELOW an exact reduced-dimension
     ## name: asking for a reduction by its own name must never silently score
     ## a different one.
-    discovered <- list()
-    registered <- mapping
     registered_reductions <- unname(unlist(registered, use.names = FALSE))
-    for (reduction_name in grep("^integrated_", available, value = TRUE)) {
-        if (reduction_name %in% registered_reductions) {
-            next
-        }
+    candidates <- grep("^integrated_", available, value = TRUE)
+    discovered <- Reduce(function(found, reduction_name) {
         method_name <- .scprokar_infer_integration_method_name(reduction_name)
         if (!nzchar(method_name) || !is.null(registered[[method_name]]) ||
-                !is.null(discovered[[method_name]])) {
+                !is.null(found[[method_name]])) {
             method_name <- reduction_name
         }
-        discovered[[method_name]] <- reduction_name
-    }
+        found[[method_name]] <- reduction_name
+        found
+    }, candidates[!candidates %in% registered_reductions], list())
     mapping <- c(
         registered,
         discovered[setdiff(names(discovered), names(registered))]
@@ -433,8 +420,7 @@ NULL
         return(out)
     }
 
-    out <- list()
-    for (item in methods) {
+    Reduce(function(out, item) {
         if (!is.null(registered[[item]])) {
             out[[item]] <- registered[[item]]
         } else if (item %in% available) {
@@ -450,8 +436,8 @@ NULL
             matched <- available[match(tolower(item), tolower(available))]
             out[[matched]] <- matched
         }
-    }
-    out
+        out
+    }, as.vector(methods), list())
 }
 
 #' @keywords internal
@@ -487,19 +473,46 @@ NULL
     joint <- prop.table(table(x, y))
     px <- rowSums(joint)
     py <- colSums(joint)
-    mutual_info <- 0
-    for (i in seq_len(nrow(joint))) {
-        for (j in seq_len(ncol(joint))) {
-            if (joint[i, j] > 0) {
-                mutual_info <- mutual_info +
-                    joint[i, j] * log(joint[i, j] / (px[i] * py[j]))
-            }
-        }
-    }
+    p <- as.vector(t(joint))
+    terms <- p * log(p / (rep(px, each = length(py)) * py))
+    mutual_info <- Reduce(
+        function(total, k) if (p[k] > 0) total + terms[k] else total,
+        seq_along(p), 0
+    )
     hx <- .scprokar_entropy(px)
     hy <- .scprokar_entropy(py)
     if (isTRUE(all.equal(hx + hy, 0))) {
         return(NA_real_)
     }
     (2 * mutual_info) / (hx + hy)
+}
+
+.scprokar_pick_assay <- function(x, assay_name, default) {
+    if (!is.null(assay_name)) {
+        return(assay_name)
+    }
+    hit <- intersect(c("logcounts", "counts"), assayNames(x))
+    if (length(hit)) hit[1] else default
+}
+
+.scprokar_attempt <- function(expr, fallback = NULL) {
+    state <- new.env(parent = emptyenv())
+    tryCatch(
+        withCallingHandlers(
+            expr,
+            warning = function(w) {
+                state$warning <- gettextf(
+                    "(converted from warning) %s", conditionMessage(w),
+                    domain = "R"
+                )
+            }
+        ),
+        error = function(e) {
+            if (getOption("warn", 0) >= 2 &&
+                    identical(conditionMessage(e), state$warning)) {
+                stop(e)
+            }
+            fallback
+        }
+    )
 }

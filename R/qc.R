@@ -55,7 +55,7 @@ RunBacQC <- function(
     gene_class_col = NULL,
     store = TRUE
 ) {
-    counts <- SummarizedExperiment::assay(sce, "counts")
+    counts <- assay(sce, "counts")
     if (is.null(counts)) {
         stop(
             "No `counts` assay found. Run CreateBacObject() first.",
@@ -63,7 +63,7 @@ RunBacQC <- function(
         )
     }
 
-    row_data <- as.data.frame(SummarizedExperiment::rowData(sce))
+    row_data <- as.data.frame(rowData(sce))
     genes <- rownames(sce)
     rrna_index <- grepl(rrna_pattern, genes, ignore.case = TRUE)
     ribo_index <- grepl(ribo_pattern, genes, ignore.case = TRUE)
@@ -88,11 +88,9 @@ RunBacQC <- function(
         return(qc_df)
     }
 
-    col_data <- as.data.frame(SummarizedExperiment::colData(sce))
-    for (nm in colnames(qc_df)) {
-        col_data[[nm]] <- qc_df[[nm]]
-    }
-    SummarizedExperiment::colData(sce) <- S4Vectors::DataFrame(col_data)
+    col_data <- as.data.frame(colData(sce))
+    col_data[colnames(qc_df)] <- qc_df
+    colData(sce) <- DataFrame(col_data)
 
     .scprokar_store_step(
         sce,
@@ -157,7 +155,7 @@ FilterBacCells <- function(
     max_rrna_fraction = NULL,
     custom_filter = NULL
 ) {
-    cd <- as.data.frame(SummarizedExperiment::colData(sce))
+    cd <- as.data.frame(colData(sce))
     required <- c("total_counts", "detected_features", "rrna_fraction")
     missing_cols <- setdiff(required, colnames(cd))
     if (length(missing_cols) > 0) {
@@ -192,7 +190,7 @@ FilterBacCells <- function(
         keep <- keep & custom_keep
     }
 
-    filtered <- sce[, keep]
+    filtered <- sce[, keep, drop = FALSE]
     .scprokar_store_step(
         filtered,
         "filtering",
@@ -219,7 +217,7 @@ FilterBacCells <- function(
 #' @keywords internal
 #' @noRd
 .scprokar_per_cell_qc <- function(sce, rrna_index, ribo_index) {
-    counts <- SummarizedExperiment::assay(sce, "counts")
+    counts <- assay(sce, "counts")
 
     totals <- as.numeric(Matrix::colSums(counts))
     detected <- as.numeric(Matrix::colSums(counts > 0))

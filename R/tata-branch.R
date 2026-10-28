@@ -83,7 +83,7 @@
     cluster_pseudotime = NULL,
     backward_penalty = 0.15
 ) {
-    cluster_names <- igraph::V(cluster_graph)$name
+    cluster_names <- as.vector(igraph::V(cluster_graph)$name)
     n_clusters <- length(cluster_names)
     transition <- matrix(
         0,
@@ -98,54 +98,43 @@
         return(transition)
     }
 
-    pt_lookup <- NULL
-    if (!is.null(cluster_pseudotime) && nrow(cluster_pseudotime) > 0L) {
-        pt_lookup <- stats::setNames(
-            cluster_pseudotime$pseudotime,
-            cluster_pseudotime$cluster
-        )
-    }
+    pt_lookup <- .tata_cluster_pt_lookup(cluster_pseudotime)
 
-    for (cluster_name in cluster_names) {
-        if (cluster_name %in% terminal_clusters) {
-            transition[cluster_name, cluster_name] <- 1
-            next
-        }
-
+    transition <- Reduce(function(transition, cluster_name) {
         outgoing <- edge_df[edge_df$from == cluster_name, , drop = FALSE]
-        if (nrow(outgoing) == 0L) {
-            transition[cluster_name, cluster_name] <- 1
-            next
-        }
-
         weights <- outgoing$weight
         if (!is.null(pt_lookup) &&
                 all(c(cluster_name, outgoing$to) %in% names(pt_lookup))) {
             delta <- pt_lookup[outgoing$to] - pt_lookup[cluster_name]
-            direction_multiplier <- ifelse(
-                is.na(delta),
-                1,
-                ifelse(delta >= -1e-8, 1, backward_penalty)
-            )
-            weights <- weights * direction_multiplier
+            weights <- weights *
+                ifelse(is.na(delta) | delta >= -1e-8, 1, backward_penalty)
         }
-
-        if (sum(weights, na.rm = TRUE) <= 0) {
+        if (cluster_name %in% terminal_clusters ||
+                sum(weights, na.rm = TRUE) <= 0) {
             transition[cluster_name, cluster_name] <- 1
-            next
+            return(transition)
         }
-
-        prob <- weights / sum(weights)
-        outgoing_prob <- tapply(prob, outgoing$to, sum)
-        transition[cluster_name, names(outgoing_prob)] <-
-            as.numeric(outgoing_prob)
+        prob <- tapply(weights / sum(weights), outgoing$to, sum)
+        transition[cluster_name, names(prob)] <- as.numeric(prob)
         residual <- 1 - sum(transition[cluster_name, ])
         if (residual > 1e-8) {
             transition[cluster_name, cluster_name] <- residual
         }
-    }
+        transition
+    }, cluster_names, transition)
 
     transition / pmax(rowSums(transition), 1e-12)
+}
+
+
+.tata_cluster_pt_lookup <- function(cluster_pseudotime, fallback = NULL) {
+    if (!is.null(cluster_pseudotime) && nrow(cluster_pseudotime) > 0L) {
+        return(stats::setNames(
+            cluster_pseudotime$pseudotime,
+            cluster_pseudotime$cluster
+        ))
+    }
+    fallback
 }
 
 
@@ -165,9 +154,10 @@
         return(branch_prob)
     }
 
-    for (i in seq_along(terminal_clusters)) {
-        branch_prob[terminal_clusters[i], terminal_clusters[i]] <- 1
-    }
+    branch_prob <- Reduce(function(bp, i) {
+        bp[terminal_clusters[i], terminal_clusters[i]] <- 1
+        bp
+    }, seq_along(terminal_clusters), branch_prob)
 
     if (length(transient_clusters) == 0L) {
         return(branch_prob)
@@ -182,10 +172,7 @@
             solve(identity_mat - q_mat, r_mat)
         },
         error = function(e) {
-            power_mat <- transition
-            for (i in seq_len(200)) {
-                power_mat <- power_mat %*% transition
-            }
+            power_mat <- Reduce(`%*%`, rep(list(transition), 201L))
             power_mat[transient_clusters, terminal_clusters, drop = FALSE]
         }
     )
@@ -431,7 +418,9 @@ compute_tata_gene_trends <- function(
     }
 
     sce <- tata_result$sce
-    assay_name <- .tata_resolve_trend_assay(sce, assay_name)
+    assay_name <- .scprokar_pick_assay(sce, assay_name, stop(
+        "No suitable assay was found for gene-trend fitting.", call. = FALSE
+    ))
     genes <- .tata_validate_gene_trend_inputs(
         sce = sce,
         genes = genes,
@@ -444,8 +433,8 @@ compute_tata_gene_trends <- function(
     }
     branch_cols <- .make_tata_probability_colnames(branches)
 
-    expr <- SummarizedExperiment::assay(sce, assay_name)
-    pseudotime <- SummarizedExperiment::colData(sce)$tata_pseudotime_scaled
+    expr <- assay(sce, assay_name)
+    pseudotime <- colData(sce)$tata_pseudotime_scaled
     trend_grid <- seq(0, 1, length.out = grid_length)
 
     trend_rows <- .tata_fit_gene_trend_rows(
@@ -553,22 +542,15 @@ cluster_tata_gene_trends <- function(
     cluster_pseudotime,
     root_cluster
 ) {
-    if (!is.null(cluster_pseudotime) && nrow(cluster_pseudotime) > 0L) {
-        pt_lookup <- stats::setNames(
-            cluster_pseudotime$pseudotime,
-            cluster_pseudotime$cluster
-        )
-        if (is.null(root_cluster) &&
-                any(cluster_pseudotime$is_root %in% TRUE)) {
-            root_cluster <- cluster_pseudotime$cluster[
-                which(cluster_pseudotime$is_root)[1]
-            ]
-        }
-    } else {
-        pt_lookup <- stats::setNames(
-            igraph::V(cluster_graph)$median_time,
-            cluster_names
-        )
+    pt_lookup <- .tata_cluster_pt_lookup(
+        cluster_pseudotime,
+        stats::setNames(igraph::V(cluster_graph)$median_time, cluster_names)
+    )
+    if (is.null(root_cluster) && NROW(cluster_pseudotime) > 0L &&
+            any(cluster_pseudotime$is_root %in% TRUE)) {
+        root_cluster <- cluster_pseudotime$cluster[
+            which(cluster_pseudotime$is_root)[1]
+        ]
     }
 
     if (is.null(root_cluster) && length(pt_lookup) > 0L) {
@@ -643,22 +625,12 @@ cluster_tata_gene_trends <- function(
 #' @keywords internal
 #' @noRd
 .tata_paths_from_root <- function(cluster_graph, root_cluster, targets) {
-    undirected_graph <- igraph::as_undirected(
-        cluster_graph,
-        mode = "collapse"
-    )
+    undirected_graph <- igraph::as_undirected(cluster_graph, mode = "collapse")
     lapply(targets, function(target_cluster) {
-        path_vertices <- .tata_shortest_path_vertices(
-            cluster_graph, root_cluster, target_cluster, mode = "out"
+        path <- .tata_trajectory_path_vertices(
+            cluster_graph, undirected_graph, root_cluster, target_cluster
         )
-
-        if (length(path_vertices) == 0L) {
-            path_vertices <- .tata_shortest_path_vertices(
-                undirected_graph, root_cluster, target_cluster, mode = "all"
-            )
-        }
-
-        igraph::V(cluster_graph)$name[as.integer(path_vertices)]
+        igraph::V(cluster_graph)$name[as.integer(path)]
     })
 }
 
@@ -682,26 +654,17 @@ cluster_tata_gene_trends <- function(
 }
 
 
+
 #' Length of the cluster prefix shared by every root-to-target path
 #'
 #' @keywords internal
 #' @noRd
 .tata_common_prefix_length <- function(path_list) {
     min_path_len <- min(vapply(path_list, length, integer(1)))
-    common_prefix_len <- 0L
-    for (pos in seq_len(min_path_len)) {
-        prefix_values <- unique(vapply(
-            path_list,
-            function(path_clusters) path_clusters[pos],
-            character(1)
-        ))
-        if (length(prefix_values) == 1L) {
-            common_prefix_len <- pos
-        } else {
-            break
-        }
-    }
-    common_prefix_len
+    shared <- vapply(seq_len(min_path_len), function(pos) {
+        length(unique(vapply(path_list, `[`, character(1), pos))) == 1L
+    }, logical(1))
+    match(FALSE, c(shared, FALSE)) - 1L
 }
 
 
@@ -911,9 +874,7 @@ cluster_tata_gene_trends <- function(
     cluster_prob_df,
     prob_colnames
 ) {
-    cell_clusters <- as.character(
-        SummarizedExperiment::colData(sce)[[cluster_col]]
-    )
+    cell_clusters <- as.character(colData(sce)[[cluster_col]])
     cluster_lookup <- match(cell_clusters, cluster_prob_df$cluster)
 
     data.frame(
@@ -936,26 +897,6 @@ cluster_tata_gene_trends <- function(
 }
 
 
-#' Choose the assay used for TATA gene-trend fitting
-#'
-#' @keywords internal
-#' @noRd
-.tata_resolve_trend_assay <- function(sce, assay_name) {
-    if (!is.null(assay_name)) {
-        return(assay_name)
-    }
-    if ("logcounts" %in% SummarizedExperiment::assayNames(sce)) {
-        return("logcounts")
-    }
-    if ("counts" %in% SummarizedExperiment::assayNames(sce)) {
-        return("counts")
-    }
-    stop(
-        "No suitable assay was found for gene-trend fitting.",
-        call. = FALSE
-    )
-}
-
 
 #' Validate gene-trend inputs and return the usable gene set
 #'
@@ -966,9 +907,7 @@ cluster_tata_gene_trends <- function(
     if (length(genes) == 0L) {
         stop("None of the requested genes are present in `sce`.", call. = FALSE)
     }
-
-    if (!"tata_pseudotime_scaled" %in%
-            colnames(SummarizedExperiment::colData(sce))) {
+if (!"tata_pseudotime_scaled" %in% colnames(colData(sce))) {
         stop(
             "`tata_pseudotime_scaled` was not found in `colData(sce)`.",
             call. = FALSE
@@ -1040,7 +979,7 @@ cluster_tata_gene_trends <- function(
         length(trend_grid)
     )
 
-    fit_obj <- .tata_fit_attempt(
+    fit_obj <- .scprokar_attempt(
         stats::loess(
             expression ~ pseudotime,
             data = fit_df,
@@ -1053,7 +992,7 @@ cluster_tata_gene_trends <- function(
     fitted_value <- if (is.null(fit_obj)) {
         rep(NA_real_, length(trend_grid))
     } else {
-        .tata_fit_attempt(
+        .scprokar_attempt(
             stats::predict(
                 fit_obj,
                 newdata = data.frame(pseudotime = trend_grid)
@@ -1063,7 +1002,7 @@ cluster_tata_gene_trends <- function(
     }
 
     if (all(is.na(fitted_value))) {
-        spline_fit <- .tata_fit_attempt(
+        spline_fit <- .scprokar_attempt(
             stats::smooth.spline(
                 x = fit_df$pseudotime,
                 y = fit_df$expression,
@@ -1076,7 +1015,7 @@ cluster_tata_gene_trends <- function(
         if (is.null(spline_fit)) {
             fitted_value <- fallback_value
         } else {
-            fitted_value <- .tata_fit_attempt(
+            fitted_value <- .scprokar_attempt(
                 stats::predict(spline_fit, x = trend_grid)$y,
                 fallback = fallback_value
             )
@@ -1092,31 +1031,6 @@ cluster_tata_gene_trends <- function(
     }
 
     fitted_value
-}
-
-.tata_fit_attempt <- function(expr, fallback) {
-    state <- new.env(parent = emptyenv())
-    state$converted_warning <- NULL
-    tryCatch(
-        withCallingHandlers(
-            expr,
-            warning = function(w) {
-                state$converted_warning <- gettextf(
-                    "(converted from warning) %s", conditionMessage(w),
-                    domain = "R"
-                )
-            }
-        ),
-        error = function(e) {
-            ## Preserve warn = 2 without confusing an ordinary fit error with
-            ## the error that R creates when it promotes a numerical warning.
-            if (getOption("warn", 0) >= 2 &&
-                    identical(conditionMessage(e), state$converted_warning)) {
-                stop(e)
-            }
-            fallback
-        }
-    )
 }
 
 
@@ -1135,15 +1049,10 @@ cluster_tata_gene_trends <- function(
     probability_threshold,
     span
 ) {
-    trend_rows <- vector("list", length(genes) * length(branches))
-    row_counter <- 0L
-
-    for (branch_idx in seq_along(branches)) {
-        branch_name <- branches[branch_idx]
+    Reduce(c, lapply(seq_along(branches), function(branch_idx) {
         branch_prob <- branch_prob_df[[branch_cols[branch_idx]]]
 
-        for (gene in genes) {
-            row_counter <- row_counter + 1L
+        lapply(as.vector(genes), function(gene) {
             fit_data <- .tata_trend_fit_frame(
                 pseudotime = pseudotime,
                 gene_expr = as.numeric(expr[gene, ]),
@@ -1151,7 +1060,7 @@ cluster_tata_gene_trends <- function(
                 probability_threshold = probability_threshold
             )
             if (is.null(fit_data)) {
-                next
+                return(NULL)
             }
 
             fitted_value <- .tata_fit_trend_curve(
@@ -1160,16 +1069,14 @@ cluster_tata_gene_trends <- function(
                 span = span
             )
 
-            trend_rows[[row_counter]] <- data.frame(
+            data.frame(
                 gene = gene,
-                branch = branch_name,
+                branch = branches[branch_idx],
                 pseudotime = trend_grid,
                 fitted_expression = as.numeric(fitted_value),
                 n_cells = fit_data$n_cells,
                 stringsAsFactors = FALSE
             )
-        }
-    }
-
-    trend_rows
+        })
+    }), list())
 }

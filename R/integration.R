@@ -71,7 +71,7 @@ IntegrateBacData <- function(
         integrated_name <- paste0("integrated_", method)
     }
 
-    batch <- as.factor(SummarizedExperiment::colData(sce)[[batch_col]])
+    batch <- as.factor(colData(sce)[[batch_col]])
     features <- .scprokar_select_features(sce, feature_set = feature_set)
 
     if (method == "mnn") {
@@ -98,16 +98,14 @@ IntegrateBacData <- function(
                 prepared$args
             )
         )
-        embedding <- SingleCellExperiment::reducedDim(
-            corrected, "corrected"
-        )[, dims, drop = FALSE]
+        embedding <- reducedDim(corrected, "corrected")[, dims, drop = FALSE]
         rownames(embedding) <- colnames(corrected)
         embedding <- embedding[colnames(sce), , drop = FALSE]
     } else if (method == "harmony") {
         .scprokar_require("harmony", "Harmony integration")
         embedding <- .scprokar_run_harmony(
-            SingleCellExperiment::reducedDim(sce, "PCA")[, dims, drop = FALSE],
-            meta_data = as.data.frame(SummarizedExperiment::colData(sce)),
+            reducedDim(sce, "PCA")[, dims, drop = FALSE],
+            meta_data = as.data.frame(colData(sce)),
             batch_col = batch_col,
             ...
         )
@@ -117,7 +115,7 @@ IntegrateBacData <- function(
     colnames(embedding) <- paste0(
         toupper(method), "_", seq_len(ncol(embedding))
     )
-    SingleCellExperiment::reducedDim(sce, integrated_name) <- embedding
+    reducedDim(sce, integrated_name) <- embedding
 
     meta <- .scprokar_get_metadata(sce)
     if (is.null(meta$integration)) {
@@ -177,14 +175,7 @@ RunIntegratedUMAP <- function(
     .scprokar_require("uwot", "RunIntegratedUMAP()")
 
     reduction_name <- .scprokar_resolve_reduction_name(sce, reduction)
-    emb <- as.matrix(SingleCellExperiment::reducedDim(sce, reduction_name))
-    if (ncol(emb) < 2) {
-        stop(
-            "Reduction '", reduction_name,
-            "' must have at least two columns to run UMAP.",
-            call. = FALSE
-        )
-    }
+    emb <- .scprokar_reduction_embedding(sce, reduction_name, "run UMAP")
     if (nrow(emb) < 3) {
         stop(
             "Need at least 3 cells to run UMAP on reduction '",
@@ -207,7 +198,7 @@ RunIntegratedUMAP <- function(
     )
     rownames(umap) <- colnames(sce)
     colnames(umap) <- c("UMAP_1", "UMAP_2")
-    SingleCellExperiment::reducedDim(sce, umap_name) <- umap
+    reducedDim(sce, umap_name) <- umap
 
     meta <- .scprokar_get_metadata(sce)
     meta$visualization <- c(
@@ -282,7 +273,7 @@ RunIntegratedClustering <- function(
         graph_data$graph, algorithm, resolution, n_cells = nrow(emb)
     )
 
-    SummarizedExperiment::colData(sce)[[cluster_col]] <- factor(membership)
+    colData(sce)[[cluster_col]] <- factor(membership)
 
     meta <- .scprokar_get_metadata(sce)
     meta$integration$clustering <- list(
@@ -350,14 +341,7 @@ PlotReduction <- function(
     shuffle = FALSE
 ) {
     reduction_name <- .scprokar_resolve_reduction_name(sce, reduction)
-    emb <- as.matrix(SingleCellExperiment::reducedDim(sce, reduction_name))
-    if (ncol(emb) < 2) {
-        stop(
-            "Reduction '", reduction_name,
-            "' must have at least two columns to plot.",
-            call. = FALSE
-        )
-    }
+    emb <- .scprokar_reduction_embedding(sce, reduction_name, "plot")
 
     plot_df <- .scprokar_reduction_plot_data(
         sce,
@@ -590,11 +574,9 @@ RegisterIntegrationEmbedding <- function(
         rownames(embedding) <- colnames(sce)
     }
 
-    available <- SingleCellExperiment::reducedDimNames(sce)
+    available <- reducedDimNames(sce)
     if (reduction_name %in% available && !isTRUE(overwrite)) {
-        existing <- as.matrix(SingleCellExperiment::reducedDim(
-            sce, reduction_name
-        ))
+        existing <- as.matrix(reducedDim(sce, reduction_name))
         same_embedding <- isTRUE(all.equal(
             existing, embedding, check.attributes = FALSE, tolerance = 0
         ))
@@ -608,7 +590,7 @@ RegisterIntegrationEmbedding <- function(
         }
     }
 
-    SingleCellExperiment::reducedDim(sce, reduction_name) <- embedding
+    reducedDim(sce, reduction_name) <- embedding
     ## Use [[ ]] rather than $: $ partial-matches, so a user key such as
     ## `source_file` would silently be promoted into the source field.
     embedding_source <- if (!is.null(metadata[["source"]])) {
@@ -679,11 +661,11 @@ RegisterExistingIntegrationEmbeddings <- function(
     metadata = list(),
     overwrite = FALSE
 ) {
-    if (!methods::is(sce, "SingleCellExperiment")) {
+    if (!is(sce, "SingleCellExperiment")) {
         stop("`sce` must be a SingleCellExperiment.", call. = FALSE)
     }
 
-    available <- SingleCellExperiment::reducedDimNames(sce)
+    available <- reducedDimNames(sce)
     if (length(available) == 0L) {
         stop("No reduced dimensions are available in `sce`.", call. = FALSE)
     }
@@ -737,7 +719,7 @@ RegisterExistingIntegrationEmbeddings <- function(
         stop("`method_names` must be unique, non-empty names.", call. = FALSE)
     }
 
-    for (i in seq_along(reductions)) {
+    Reduce(function(sce, i) {
         reduction <- reductions[[i]]
         method_name <- method_names[[i]]
         target <- if (isTRUE(copy) && !startsWith(reduction, prefix)) {
@@ -752,17 +734,15 @@ RegisterExistingIntegrationEmbeddings <- function(
         method_metadata$source <- "external_existing_reduction"
         method_metadata$original_reduction <- reduction
 
-        sce <- RegisterIntegrationEmbedding(
+        RegisterIntegrationEmbedding(
             sce = sce,
-            embedding = SingleCellExperiment::reducedDim(sce, reduction),
+            embedding = reducedDim(sce, reduction),
             method_name = method_name,
             reduction_name = target,
             metadata = method_metadata,
             overwrite = overwrite
         )
-    }
-
-    sce
+    }, seq_along(reductions), sce)
 }
 
 #' @keywords internal
@@ -822,43 +802,18 @@ RegisterExistingIntegrationEmbeddings <- function(
         cosine_args$BPPARAM <- args$BPPARAM
     }
     batches <- lapply(batches, function(sce) {
-        x <- SummarizedExperiment::assay(sce, assay_type)
+        x <- assay(sce, assay_type)
         l2 <- do.call(batchelor::cosineNorm, c(list(x = x), cosine_args))
         ## Match fastMNN's column scaling, including its zero-norm floor,
         ## without the deprecated scuttle::normalizeCounts() call.
         normalized <- Matrix::t(Matrix::t(x) / pmax(l2, 1e-8))
         dimnames(normalized) <- dimnames(x)
-        SummarizedExperiment::assay(sce, assay_type) <- normalized
+        assay(sce, assay_type) <- normalized
         sce
     })
     ## The input is already cosine-normalized; avoid applying it twice.
     args$cos.norm <- FALSE
     list(batches = batches, args = args)
-}
-
-#' @keywords internal
-.scprokar_harmony_attempt <- function(harmony_fun, args) {
-    state <- new.env(parent = emptyenv())
-    state$converted_warning <- NULL
-    tryCatch(
-        withCallingHandlers(
-            do.call(harmony_fun, args),
-            warning = function(w) {
-                state$converted_warning <- gettextf(
-                    "(converted from warning) %s", conditionMessage(w),
-                    domain = "R"
-                )
-            }
-        ),
-        error = function(e) {
-            ## A warning promoted by warn = 2 is not an API mismatch.
-            if (getOption("warn", 0) >= 2 &&
-                    identical(conditionMessage(e), state$converted_warning)) {
-                stop(e)
-            }
-            NULL
-        }
-    )
 }
 
 #' @keywords internal
@@ -888,7 +843,7 @@ RegisterExistingIntegrationEmbeddings <- function(
         )
         ## Retry version-specific signatures on errors while allowing
         ## convergence, parameter and other backend warnings to reach callers.
-        out <- .scprokar_harmony_attempt(harmony_fun, args_new)
+        out <- .scprokar_attempt(do.call(harmony_fun, args_new))
 
         if (is.null(out)) {
             args_legacy <- c(
@@ -900,7 +855,7 @@ RegisterExistingIntegrationEmbeddings <- function(
                 ),
                 extra
             )
-            out <- .scprokar_harmony_attempt(harmony_fun, args_legacy)
+            out <- .scprokar_attempt(do.call(harmony_fun, args_legacy))
         }
 
         if (!is.null(out)) {
@@ -919,7 +874,7 @@ RegisterExistingIntegrationEmbeddings <- function(
             ),
             extra
         )
-        out <- .scprokar_harmony_attempt(harmony_fun, args_matrix)
+        out <- .scprokar_attempt(do.call(harmony_fun, args_matrix))
         if (!is.null(out)) {
             return(as.matrix(out))
         }
@@ -942,7 +897,7 @@ RegisterExistingIntegrationEmbeddings <- function(
         return(.scprokar_resolve_reduction_name(sce, integrated_reduction))
     }
 
-    reduction_names <- SingleCellExperiment::reducedDimNames(sce)
+    reduction_names <- reducedDimNames(sce)
     integrated_matches <- grep("^integrated_", reduction_names, value = TRUE)
     umap_matches <- grep("^umap_integrated_", reduction_names, value = TRUE)
     if (isTRUE(prefer_umap)) {
@@ -974,7 +929,7 @@ RegisterExistingIntegrationEmbeddings <- function(
     reduction_name <- .scprokar_default_integration_reduction(
         sce, integrated_reduction = reduction, prefer_umap = FALSE
     )
-    emb <- as.matrix(SingleCellExperiment::reducedDim(sce, reduction_name))
+    emb <- as.matrix(reducedDim(sce, reduction_name))
     if (!is.null(dims)) {
         emb <- emb[, dims, drop = FALSE]
     }
@@ -988,6 +943,18 @@ RegisterExistingIntegrationEmbeddings <- function(
         )
     }
     list(reduction = reduction_name, embedding = emb)
+}
+
+.scprokar_reduction_embedding <- function(sce, reduction_name, purpose) {
+    emb <- as.matrix(reducedDim(sce, reduction_name))
+    if (ncol(emb) < 2) {
+        stop(
+            "Reduction '", reduction_name,
+            "' must have at least two columns to ", purpose, ".",
+            call. = FALSE
+        )
+    }
+    emb
 }
 
 #' @keywords internal
@@ -1058,12 +1025,9 @@ RegisterExistingIntegrationEmbeddings <- function(
         dists <- nn$nn.dists[, -1, drop = FALSE]
     } else {
         dmat <- as.matrix(stats::dist(emb))
-        idx <- t(apply(dmat, 1, function(x) order(x)[2:(k + 1)]))
-        dists <- matrix(
-            dmat[cbind(rep(seq_len(n), each = k), as.vector(t(idx)))],
-            nrow = n,
-            byrow = TRUE
-        )
+        cols <- seq_len(k) + 1L
+        idx <- t(apply(dmat, 1, order))[, cols, drop = FALSE]
+        dists <- t(apply(dmat, 1, sort, na.last = TRUE))[, cols, drop = FALSE]
     }
 
     edges <- unique(do.call(
@@ -1121,7 +1085,7 @@ RegisterExistingIntegrationEmbeddings <- function(
     facet_by,
     shuffle
 ) {
-    meta <- as.data.frame(SummarizedExperiment::colData(sce))
+    meta <- as.data.frame(colData(sce))
     plot_df <- data.frame(
         dim1 = emb[, 1],
         dim2 = emb[, 2],

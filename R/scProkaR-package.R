@@ -12,6 +12,12 @@
 #' `timepoints` metadata, and is used throughout the package workflow vignette.
 #'
 #' @keywords internal
+#' @importFrom methods as is
+#' @importFrom S4Vectors DataFrame metadata metadata<-
+#' @importFrom SingleCellExperiment reducedDim reducedDim<- reducedDimNames
+#' @importFrom SingleCellExperiment reducedDims<-
+#' @importFrom SummarizedExperiment assay assay<- assayNames colData colData<-
+#' @importFrom SummarizedExperiment rowData rowData<-
 "_PACKAGE"
 
 #' Example bacterial single-cell dataset

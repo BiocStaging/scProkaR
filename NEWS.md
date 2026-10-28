@@ -1,3 +1,16 @@
+# scProkaR 0.99.3
+
+## Review changes
+
+* Require R (>= 4.6.0).
+* Import the core `SummarizedExperiment`, `SingleCellExperiment`,
+  `S4Vectors` and `methods` accessors through `NAMESPACE` and call them
+  without `::`.
+* Replace `for` loops with vectorised code and `*apply` functions.
+* Add `drop = FALSE` where subsetting could reduce dimensions.
+* Factor repeated code into shared internal helpers.
+* Return an n x k neighbour index for `k = 1` when RANN is not installed.
+
 # scProkaR 0.99.2
 
 ## Maintenance

@@ -66,7 +66,7 @@ aggregate_pseudobulk <- function(
 
     .check_pseudobulk_inputs(sce, sample_cols, assay_name)
 
-    meta <- as.data.frame(SummarizedExperiment::colData(sce))
+    meta <- as.data.frame(colData(sce))
     keep_cells <- stats::complete.cases(meta[, sample_cols, drop = FALSE])
     if (!any(keep_cells)) {
         stop(
@@ -76,9 +76,7 @@ aggregate_pseudobulk <- function(
     }
 
     meta <- meta[keep_cells, , drop = FALSE]
-    counts <- SummarizedExperiment::assay(
-        sce, assay_name
-    )[, keep_cells, drop = FALSE]
+    counts <- assay(sce, assay_name)[, keep_cells, drop = FALSE]
 
     groups <- .pseudobulk_groups(meta, sample_cols, min_cells)
     group_factor <- groups$factor
@@ -111,17 +109,17 @@ aggregate_pseudobulk <- function(
     pb <- SingleCellExperiment::SingleCellExperiment(
         assays = list(counts = agg_counts)
     )
-    SummarizedExperiment::colData(pb) <- S4Vectors::DataFrame(sample_meta)
+    colData(pb) <- DataFrame(sample_meta)
 
     if (isTRUE(add_logcounts)) {
-        SummarizedExperiment::assay(pb, "logcounts") <- edgeR::cpm(
-            SummarizedExperiment::assay(pb, "counts"),
+        assay(pb, "logcounts") <- edgeR::cpm(
+            assay(pb, "counts"),
             log = TRUE,
             prior.count = prior_count
         )
     }
 
-    S4Vectors::metadata(pb)$pseudobulk <- list(
+    metadata(pb)$pseudobulk <- list(
         sample_cols = sample_cols,
         aggregation = aggregation,
         assay_name = assay_name,
@@ -173,11 +171,11 @@ filter_pseudobulk_samples <- function(
     min_cells = 10L,
     min_lib_size = NULL
 ) {
-    if (!methods::is(pb, "SingleCellExperiment")) {
+    if (!is(pb, "SingleCellExperiment")) {
         stop("`pb` must be a SingleCellExperiment.", call. = FALSE)
     }
 
-    meta <- as.data.frame(SummarizedExperiment::colData(pb))
+    meta <- as.data.frame(colData(pb))
     keep <- rep(TRUE, ncol(pb))
 
     if ("ncells" %in% colnames(meta) && !is.null(min_cells)) {
@@ -191,7 +189,7 @@ filter_pseudobulk_samples <- function(
         lib_size <- if ("lib.size" %in% colnames(meta)) {
             meta$lib.size
         } else {
-            Matrix::colSums(SummarizedExperiment::assay(pb, "counts"))
+            Matrix::colSums(assay(pb, "counts"))
         }
         keep <- keep & lib_size >= min_lib_size
     }
@@ -248,24 +246,19 @@ normalize_pseudobulk <- function(
 ) {
     method <- match.arg(method)
 
-    if (!methods::is(pb, "SingleCellExperiment")) {
+    if (!is(pb, "SingleCellExperiment")) {
         stop("`pb` must be a SingleCellExperiment.", call. = FALSE)
     }
 
-    if (!assay_name %in% SummarizedExperiment::assayNames(pb)) {
+    if (!assay_name %in% assayNames(pb)) {
         stop("Assay `", assay_name, "` is not present in `pb`.", call. = FALSE)
     }
 
-    dge <- edgeR::DGEList(counts = SummarizedExperiment::assay(pb, assay_name))
-    if (method != "none") {
-        dge <- edgeR::calcNormFactors(dge, method = method)
-    } else {
-        dge$samples$norm.factors <- rep(1, ncol(pb))
-    }
+    dge <- .prepare_edger_dge(assay(pb, assay_name), normalization = method)
 
-    SummarizedExperiment::colData(pb)$lib.size <- dge$samples$lib.size
-    SummarizedExperiment::colData(pb)$norm.factors <- dge$samples$norm.factors
-    SummarizedExperiment::assay(pb, output_assay) <- edgeR::cpm(
+    colData(pb)$lib.size <- dge$samples$lib.size
+    colData(pb)$norm.factors <- dge$samples$norm.factors
+    assay(pb, output_assay) <- edgeR::cpm(
         dge,
         log = TRUE,
         prior.count = prior_count
@@ -280,17 +273,16 @@ normalize_pseudobulk <- function(
 #' @keywords internal
 #' @noRd
 .check_pseudobulk_inputs <- function(sce, sample_cols, assay_name) {
-    if (!methods::is(sce, "SingleCellExperiment")) {
+    if (!is(sce, "SingleCellExperiment")) {
         stop("`sce` must be a SingleCellExperiment.", call. = FALSE)
     }
 
-    if (!assay_name %in% SummarizedExperiment::assayNames(sce)) {
+    if (!assay_name %in% assayNames(sce)) {
         stop("Assay `", assay_name, "` is not present in `sce`.", call. = FALSE)
     }
 
     if (length(sample_cols) == 0L ||
-        !all(sample_cols %in%
-            colnames(SummarizedExperiment::colData(sce)))) {
+        !all(sample_cols %in% colnames(colData(sce)))) {
         stop(
             "`sample_cols` must all be present in `colData(sce)`.",
             call. = FALSE

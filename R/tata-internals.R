@@ -31,48 +31,39 @@
 
 
 .ensure_reduced_dim <- function(sce, dimred = "PCA", n_pcs = 20) {
-    if (!methods::is(sce, "SingleCellExperiment")) {
+    if (!is(sce, "SingleCellExperiment")) {
         stop("`sce` must be a SingleCellExperiment.", call. = FALSE)
     }
 
-    if (dimred %in% SingleCellExperiment::reducedDimNames(sce)) {
+    if (dimred %in% reducedDimNames(sce)) {
         return(sce)
     }
 
-    assay_name <- NULL
-    if ("logcounts" %in% SummarizedExperiment::assayNames(sce)) {
-        assay_name <- "logcounts"
-    } else if ("counts" %in% SummarizedExperiment::assayNames(sce)) {
-        assay_name <- "counts"
-    }
+    assay_name <- .scprokar_pick_assay(sce, NULL, stop(
+        "No reduced dimension named `", dimred, "` was found, and neither ",
+        "`logcounts` nor `counts` assays are available to compute PCA.",
+        call. = FALSE
+    ))
 
-    if (is.null(assay_name)) {
-        stop(
-            "No reduced dimension named `", dimred, "` was found, and neither ",
-            "`logcounts` nor `counts` assays are available to compute PCA.",
-            call. = FALSE
-        )
-    }
-
-    mat <- t(as.matrix(SummarizedExperiment::assay(sce, assay_name)))
+    mat <- t(as.matrix(assay(sce, assay_name)))
     pca <- stats::prcomp(mat, center = TRUE, scale. = TRUE)
     n_keep <- min(n_pcs, ncol(pca$x))
     pcs <- pca$x[, seq_len(n_keep), drop = FALSE]
     colnames(pcs) <- paste0("PC", seq_len(ncol(pcs)))
-    SingleCellExperiment::reducedDim(sce, dimred) <- pcs
+    reducedDim(sce, dimred) <- pcs
     sce
 }
 
 
 .get_embedding_matrix <- function(x, dimred = "PCA", dims = NULL) {
-    if (methods::is(x, "SingleCellExperiment")) {
-        if (!dimred %in% SingleCellExperiment::reducedDimNames(x)) {
+    if (is(x, "SingleCellExperiment")) {
+        if (!dimred %in% reducedDimNames(x)) {
             stop(
                 "Reduced dimension `", dimred, "` is not present in `sce`.",
                 call. = FALSE
             )
         }
-        embedding <- as.matrix(SingleCellExperiment::reducedDim(x, dimred))
+        embedding <- as.matrix(reducedDim(x, dimred))
         rownames(embedding) <- colnames(x)
     } else {
         embedding <- as.matrix(x)
@@ -109,26 +100,18 @@
 
     if (requireNamespace("BiocNeighbors", quietly = TRUE)) {
         raw_knn <- BiocNeighbors::findKNN(embedding, k = k + 1L)
-        nn.index <- matrix(NA_integer_, nrow = n_cells, ncol = k)
-        nn.dist <- matrix(NA_real_, nrow = n_cells, ncol = k)
-
-        for (i in seq_len(n_cells)) {
-            keep <- raw_knn$index[i, ] != i
-            idx_i <- raw_knn$index[i, keep]
-            dist_i <- raw_knn$distance[i, keep]
-            if (length(idx_i) < k) {
-                stop(
-                    "BiocNeighbors did not return enough non-self neighbors.",
-                    call. = FALSE
-                )
-            }
-            nn.index[i, ] <- idx_i[seq_len(k)]
-            nn.dist[i, ] <- dist_i[seq_len(k)]
+        keep <- raw_knn$index != seq_len(n_cells)
+        if (any(rowSums(keep) < k)) {
+            stop(
+                "BiocNeighbors did not return enough non-self neighbors.",
+                call. = FALSE
+            )
         }
+        ord <- order(row(keep), !keep)[rep(seq_len(ncol(keep)) <= k, n_cells)]
 
         return(list(
-            nn.index = nn.index,
-            nn.dist = nn.dist,
+            nn.index = matrix(raw_knn$index[ord], n_cells, k, byrow = TRUE),
+            nn.dist = matrix(raw_knn$distance[ord], n_cells, k, byrow = TRUE),
             engine = "BiocNeighbors"
         ))
     }
@@ -237,12 +220,13 @@
     typical_step <- .typical_time_step(time_numeric)
     clusters <- as.character(clusters)
     refined <- clusters
+    cluster_idx <- lapply(unique(clusters), function(cluster_name) {
+        which(clusters == cluster_name)
+    })
 
-    for (cluster_name in unique(clusters)) {
-        idx <- which(clusters == cluster_name)
-
+    refined[unlist(cluster_idx)] <- unlist(lapply(cluster_idx, function(idx) {
         if (length(idx) < max(6L, as.integer(min_cluster_size))) {
-            next
+            return(clusters[idx])
         }
 
         split_labels <- .temporal_split_labels(
@@ -254,7 +238,7 @@
         )
 
         if (is.null(split_labels)) {
-            next
+            return(clusters[idx])
         }
 
         if (!is.null(embedding) && !.temporal_split_is_separated(
@@ -262,11 +246,11 @@
             split_labels = split_labels,
             min_embedding_gap = min_embedding_gap
         )) {
-            next
+            return(clusters[idx])
         }
 
-        refined[idx] <- paste0(cluster_name, "_", split_labels)
-    }
+        paste0(clusters[idx], "_", split_labels)
+    }))
 
     .relabel_clusters_by_median_time(refined, time_numeric)
 }
@@ -439,8 +423,7 @@
         return(matrix(numeric(0), nrow = nrow(mat), ncol = 0L))
     }
     mat <- mat[, keep, drop = FALSE]
-    for (j in seq_len(ncol(mat))) {
-        col_j <- mat[, j]
+    mat[] <- apply(mat, 2L, function(col_j) {
         finite_j <- col_j[is.finite(col_j)]
         fill_value <- if (length(finite_j) > 0L)
             stats::median(finite_j) else 0
@@ -451,8 +434,8 @@
         } else {
             col_j <- (col_j - mean(col_j)) / sd_j
         }
-        mat[, j] <- col_j
-    }
+        col_j
+    })
     mat
 }
 
